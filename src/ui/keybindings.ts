@@ -49,6 +49,9 @@ export const COMMANDS = {
   settings: { title: "Open Settings", group: "navigation", scope: "app", when: "Always", defaults: ["Ctrl+,"] },
   toggleList: { title: "Hide or show the chat list", group: "panels", scope: "app", when: "Always", defaults: ["Ctrl+B"] },
   chatListMode: { title: "Switch the chat list between Chats and Bots", group: "panels", scope: "app", when: "botMode", defaults: ["Ctrl+Shift+B"] },
+  zoomIn: { title: "Zoom the app in", group: "panels", scope: "app", when: "Always", defaults: ["Ctrl+=", "Ctrl+Shift+=", "Ctrl++"] },
+  zoomOut: { title: "Zoom the app out", group: "panels", scope: "app", when: "Always", defaults: ["Ctrl+-"] },
+  zoomReset: { title: "Reset the app's zoom to 100%", group: "panels", scope: "app", when: "Always", defaults: ["Ctrl+0"] },
   toggleSplit: { title: "Split the chat, or close the split", group: "panels", scope: "app", when: "Always", defaults: ["Ctrl+\\"] },
   focusLeft: { title: "Focus the left (or top) pane", group: "panels", scope: "app", when: "split", defaults: ["Ctrl+1"] },
   focusRight: { title: "Focus the right (or bottom) pane", group: "panels", scope: "app", when: "split", defaults: ["Ctrl+2"] },
@@ -158,6 +161,12 @@ export const FIXED: readonly FixedKey[] = [
     group: "panels",
   },
   { title: "Close the focused chat tab", keys: [chord("Delete")], when: "chatTabFocus", group: "panels" },
+  {
+    title: "Make the chat list or the side panel narrower or wider, or the narrowest or widest it gets",
+    keys: [chord("ArrowLeft"), chord("ArrowRight"), chord("Home"), chord("End")],
+    when: "panelEdgeFocus",
+    group: "panels",
+  },
   { title: "Move the split's divider", keys: [chord("ArrowLeft"), chord("ArrowRight"), chord("ArrowUp"), chord("ArrowDown")], when: "dividerFocus", group: "panels" },
   { title: "Go up to the parent folder in Files", keys: [chord("Alt+ArrowUp")], when: "fileBrowserFocus", group: "panels" },
 ];
@@ -284,6 +293,12 @@ export function typeNewLine(e: KeyboardEvent | ReactKeyboardEvent): void {
 
 /** Which app-wide command a key press is. Every window listener asks this, so one press runs one command. */
 export const pickApp = (e: KeyboardEvent | ReactKeyboardEvent) => pick(e, "app");
+
+/** Whether a key press zooms the app (zoom.ts): a sheet or palette that keeps the app's keys lets these through. */
+export const isZoomKey = (e: KeyboardEvent | ReactKeyboardEvent) => {
+  const command = pickApp(e);
+  return command === "zoomIn" || command === "zoomOut" || command === "zoomReset";
+};
 
 /**
  * Each command that shares a chord with another it could both fire with (the same scope, or either app-wide), or with
