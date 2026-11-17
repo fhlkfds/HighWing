@@ -134,6 +134,8 @@ import { stepHistory } from "./ui/previewHistory";
 import { PANE_MIN_WIDTH, SidePanel, type PanelTab } from "./ui/SidePanel";
 import { ScreenTab } from "./ui/Screen";
 import { LinksProvider, useOpenPreview } from "./ui/previewContext";
+import { SentImageReader } from "./ui/previews";
+import { SentImageStore } from "./hermes/sentImages";
 import { tauriLocalFiles, tauriServerPages, tauriWebPages, type LocalFiles, type ServerPages, type WebPages } from "./ui/tauriPreview";
 import type { PreviewTarget } from "./hermes/preview";
 import { pathOpener } from "./hermes/paths";
@@ -1632,6 +1634,9 @@ export function Main({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one store per Hermes connection: keyed on `hermes`, which the factory does not read
   const troubleshoots = useMemo(() => new TroubleshootStore(), [hermes]);
   useEffect(() => hermes.subscribe(() => troubleshoots.observe(hermes.getSnapshot())), [hermes, troubleshoots]);
+  // Sent images read in this run (sentImages.ts). A new store for each profile, so a path is never shown from another's.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on `profile` too, which the factory does not read
+  const sentImages = useMemo(() => new SentImageStore((path) => hermes.readHostFile(path), (chat, path) => hermes.sentHere(chat, path)), [hermes, profile]);
   // Idle compaction (idleCompact.ts, ADR 0119): a chat open on Hermes here that has sat idle with its context window
   // past the owner's mark is compacted, one at a time. It sees every change in the chats, to time how long each has
   // been idle, and looks for one that is due every IDLE_COMPACT_CHECK_MS. Off unless turned on in Settings → Model.
@@ -3272,6 +3277,7 @@ export function Main({
 
   return (
     <LinksProvider preview={openPreview} path={openPath} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
+    <SentImageReader.Provider value={sentImages}>
     <div className="app" inert={covered || restarting}>
       <Rail
         status={status}
@@ -4115,6 +4121,7 @@ export function Main({
           document.body,
         )}
     </div>
+    </SentImageReader.Provider>
     </LinksProvider>
   );
 }

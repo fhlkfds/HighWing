@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Attachment } from "../hermes/model";
-import { AttachmentChip, Previews } from "./previews";
+import { SentImageStore, sentImage } from "../hermes/sentImages";
+import { AttachmentChip, Previews, SentImageReader, SentImages } from "./previews";
+import { PathsIn } from "./previewContext";
 
 const img = (path: string): Attachment => ({ path, name: path.split("/").pop()!, size: 9, kind: "image" });
 const file = (path: string): Attachment => ({ ...img(path), kind: "file" });
@@ -172,6 +174,47 @@ describe("Attachment chips", () => {
       expect(out).not.toContain("<img");
       expect(out).toContain("lucide-paperclip");
       expect(out).toContain(`title="${f.path}"`);
+    }
+  });
+});
+
+describe("A sent message's images", () => {
+  const shown = (offline: boolean, sentHere = true) => {
+    const reads: string[] = [];
+    const store = new SentImageStore(
+      (path) => (reads.push(path), new Promise(() => {})),
+      () => sentHere,
+    );
+    const html = renderToStaticMarkup(
+      <SentImageReader.Provider value={store}>
+        <PathsIn session="c1">
+          <SentImages images={[sentImage("/h/images/upload_1.png")!]} offline={offline} />
+        </PathsIn>
+      </SentImageReader.Provider>,
+    );
+    return { html, reads };
+  };
+
+  it("names an image not read yet while Hermes can't be reached, and says what it waits for, instead of loading", () => {
+    const { html } = shown(true);
+    expect(html).toContain("upload_1.png");
+    expect(html).toContain("It shows once Hermes is reachable and the chat has loaded.");
+    expect(html).not.toContain("aria-busy");
+    expect(html).not.toContain("Try again");
+  });
+
+  it("shows it loading while Hermes can be reached", () => {
+    expect(shown(false).html).toContain('aria-busy="true"');
+  });
+
+  it("names an image this app didn't send, with why and Show image, and reads nothing", () => {
+    for (const offline of [false, true]) {
+      const { html, reads } = shown(offline, false);
+      expect(html).toContain("upload_1.png");
+      expect(html).toContain("Not sent from this app, so it loads when you ask.");
+      expect(html).toContain(">Show image</button>");
+      expect(html).not.toContain("aria-busy");
+      expect(reads).toEqual([]);
     }
   });
 });
