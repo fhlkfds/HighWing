@@ -2056,6 +2056,7 @@ export function Main({
       screenshotsRef.current.api,
       (remote) => remote && screenshotsRef.current.attached(),
       () => revealComposerRef.current(),
+      (key) => savedDrafts.get(key),
     );
     setDesk(d);
     return () => d.dispose();
