@@ -1,0 +1,4963 @@
+import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal, flushSync } from "react-dom";
+import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, PanelLeft, PanelRight, PanelTop, Target, X } from "lucide-react";
+import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, TitleModelUnavailable, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type NoticeCard, type Notify } from "./hermes/transport";
+import { invoke } from "@tauri-apps/api/core";
+import type { CommandHost } from "./ui/SlashCommands";
+import { STEER, type ServerCommandList } from "./hermes/commands";
+import { offeredCommands, takenName, type ChatContext } from "./hermes/extensions";
+import { useExtensions } from "./ui/extensionsContext";
+import type { SkillCall, SkillCommands } from "./hermes/skillCommands";
+import { CHECK_EVERY_MS } from "./hermes/otherProfiles";
+import { type Account, type Kept, type SavedSignIn, launchOpen, launchSignIn, removeConnection, savedSignIn, savedSignInOrForm, signIn, signInForm, signOutToSignIn } from "./hermes/account";
+import { CONNECTIONS_KEY, Connections, type SavedConnection, type ScopeSource, addressLabel, defaultName, keptRouteHealth, prefScope } from "./hermes/connections";
+import { forgetConnectionData } from "./hermes/forgetConnection";
+import { clearRename, forgetProfileLocally, noteRename, renameProfileLocally, renamePending } from "./hermes/profileLocalData";
+import { serial as makeSerial } from "./hermes/serial";
+import { localChatCache } from "./hermes/chatCache";
+import { draftKey, drafts } from "./hermes/drafts";
+import { PersonaStore, personaKey } from "./hermes/personaStore";
+import { sending, unsaved, type Sending } from "./hermes/unsaved";
+import { connOf, restoreBlocked, savedBackupEnv } from "./hermes/backup";
+import { chatToReopen, forgetOpenChat, rememberOpenChat, type ReopenOn } from "./hermes/uiPrefs";
+import { PROJECTS_KEY, projectLinks, projectScope } from "./hermes/projectLinks";
+import { chatContext, contextLedger, knownWindow, type ChatContexts } from "./hermes/projectContextFiles";
+import { ProjectsStore, type Project } from "./hermes/projects";
+import { instructionsMessage, modelProblem, resolveNewChat, savedDefaults, type ProjectDefaults } from "./hermes/projectDefaults";
+import { unavailableWords } from "./hermes/instructionsAI";
+import { systemSecrets } from "./hermes/tauriKeyring";
+import { appUpdates } from "./hermes/tauriUpdates";
+import { tauriSnapshots } from "./hermes/snapshots";
+import { needsAttention, type Updater } from "./hermes/updates";
+import { desktopNotify } from "./hermes/tauriNotify";
+import { ScreenshotDesk, type ScreenshotApi } from "./hermes/screenshots";
+import { ReferenceDesk } from "./hermes/chatReferences";
+import { deadline } from "./hermes/remoteFiles";
+import { desktopSummon, type SummonApi, type Summoned } from "./hermes/summon";
+import { SelectionWatch, quoted, untilFocused } from "./hermes/selection";
+import { onDesktopScreenshot, screenshotSupport, showWindow, syncScreenshotOutbox, tauriScreenshots, type ScreenshotSupport } from "./hermes/tauriScreenshot";
+import { AtConnectionLimit, ConnectionManager, DisconnectConnection, RailConnections, RemoveConnection, SwitchConnection, atLimitText, liveCounts } from "./ui/Connections";
+import { checkShortcut, shortcutLabel, shortcutOf } from "./ui/shortcut";
+import { chordLabel, pickApp, useBindings } from "./ui/keybindings";
+
+import { reachRoute, tauriPipe, tauriProbe, tauriReach, type SignInDetails } from "./hermes/tauriPipe";
+import { AttemptLog, tauriAttemptStore } from "./hermes/attempts";
+import { readMethods } from "./hermes/signInMethods";
+import { PreferredRoutes, type RouteHealth, routesOf, sshAddressOf } from "./hermes/routes";
+import { signInError, testSignIn, type SignInError, type TestOutcome } from "./hermes/setup";
+import { isOutgoing, isWaiting, type Attachment, type Chat, type ConnectionStatus, type Found, type Hit, type SentReference } from "./hermes/model";
+import { shortName, type ModelCatalog, type ModelPick } from "./hermes/models";
+import { ChatList, Rail, leavingNote } from "./ui/Sidebar";
+import { type ChatLink, type ConnectionRefs, checkConnection, connectionKey, connectionLabel, connectionRefs, formatChatLink, locateChat, parseChatLink } from "./hermes/chatLinks";
+import { desktopLinks, type LinkInbox } from "./hermes/tauriLinks";
+import { ChatLinkNotice, type LinkNoticeView } from "./ui/ChatLinkNotice";
+import { Inbox } from "./ui/Inbox";
+import { BotList, Bots, BOTS_REFRESH_MS, type BotEditWiring } from "./ui/Bots";
+import { Office } from "./ui/Office";
+import { EMPTY_OFFICE_MEMORY } from "./ui/OfficeBuilding";
+import { officeRooms, type Desk, type Room } from "./hermes/office";
+import type { SubagentId } from "./hermes/subagents";
+import { policyOf } from "./hermes/chatKind";
+import { jobRunTitle } from "./hermes/cronJobs";
+import { botActivity, isBotChat, isBotChatTitle, newInBotChatNote, type Bot } from "./hermes/bots";
+import { blocksRestore, inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxAcks, type InboxEntry } from "./hermes/inbox";
+import { searchEverywhere, type EverywhereFilter, type EverywhereOutcome, type EverywhereRow } from "./hermes/everywhere";
+import { LiveConnections, attention as attentionOf, withoutServer, type ChatRef, type LiveSummary } from "./hermes/liveConnections";
+import { handoffs as handoffsOf, nextHandoffChange, outstandingIds, type Handoff, type StopWaiting } from "./hermes/dispatched";
+import { ChatPane, type Comparing, type FollowUpHost, type JumpTarget } from "./ui/ChatPane";
+import type { ChatPin } from "./ui/ChatMenu";
+import { BranchDialog, BranchedFrom } from "./ui/Branch";
+import { MembershipDialog, MembershipStatus, needsOwner as membershipNeedsOwner } from "./ui/MembershipSync";
+import { ReplayDialog } from "./ui/Replay";
+import { GoalBar, SetGoalDialog, useChatGoal, type GoalApi } from "./ui/GoalBar";
+import { RunDialog } from "./ui/RunView";
+import { replayBlocked, variantsIn, type ReplayKind } from "./hermes/replay";
+import { branchBlocked, type BranchLink } from "./hermes/branch";
+import type { QueueApi } from "./ui/Queue";
+import { paneNames, Split, usePaneVisible, type PaneSlot, type SplitDir } from "./ui/Split";
+import { closeTabIn, navigateTabs, PaneDrop, TabStrip, type TabAction } from "./ui/Tabs";
+import { dropLabel, EDGE_SIDE, EDGES, moveTab, sameMove, type DropZone, type MovedChat, type TabDrop } from "./ui/tabMoves";
+import type { VoiceApi } from "./ui/Voice";
+import { prefsOf, tauriLocalStt, type LocalSttApi } from "./hermes/localStt";
+import { DEFAULT_STT_PREFS, sttRoute } from "./hermes/sttRoute";
+import { SearchPalette } from "./ui/Search";
+import { SavedFilters, TagManager } from "./ui/Tags";
+import { useSnoozeClock } from "./ui/Snooze";
+import { TagsStore, savedTagsFile, type SavedFilter } from "./hermes/tags";
+import { AttentionClock, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, STOP_WAITING_KEY, SnoozeStore, StopWaitingStore, chatSections, heldClears, wakeFull } from "./hermes/snooze";
+import { IDLE_COMPACT_CHECK_MS, IdleCompactor, idleCompactionNote } from "./hermes/idleCompact";
+import { runFilter } from "./hermes/chatFilter";
+import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
+import type { ProfilesWiring } from "./ui/ProfileSettings";
+import { LeavePersona, type LeaveWhat } from "./ui/LeavePersona";
+import { LeaveArtifacts } from "./ui/ArtifactEditor";
+import { ASK_DEADLINE_MS, ArtifactStore, artifactIo, isDirty } from "./hermes/artifacts";
+import { useWindowTitle, windowTitle } from "./ui/windowTitle";
+import { LeaveMemoryEdit, useCloseGuard } from "./ui/LeaveMemoryEdit";
+import { tauriCloseGuard, type CloseGuard } from "./ui/tauriWindow";
+import { FileBrowser } from "./ui/FileBrowser";
+import { UsageAnalytics, type UsageTab } from "./ui/UsageAnalytics";
+import { BudgetOpener, BudgetWatches, budgetShelves } from "./hermes/budgetWatch";
+import { Work } from "./ui/Work";
+import { WORK_PARTS, type WorkFeature } from "./ui/WorkPlan";
+import { note, type RemoteLog } from "./hermes/logs";
+import { STATUS_LABEL, composing, routeLabel } from "./ui/bits";
+import { editStep, isTextField } from "./ui/editKeys";
+import { ProjectScreen, ProjectSwitcher, type ProjectUnread } from "./ui/Projects";
+import { ContextCard } from "./ui/ProjectContext";
+import { ScheduledJobs } from "./ui/ScheduledJobs";
+import { TroubleshootStore, startTroubleshoot } from "./hermes/troubleshoot";
+import { CapabilityGate } from "./ui/Diagnostics";
+import { CAPABILITIES, guideUrl, type CapabilityId } from "./hermes/capabilities";
+import { useCapabilities } from "./ui/Diagnostics";
+import { Automations } from "./ui/Automations";
+import { tauriLocalTerminal, tauriTerminal } from "./ui/tauriTerminal";
+import { useShells } from "./ui/useShells";
+import { MAX_FOLDER_SHELLS, terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
+import { REPO_PATH_KEY, REPO_RECENT_KEY, REPO_TARGET_KEY, readRecent, remember, repoTarget } from "./hermes/repo";
+import { RepositoryScreen } from "./ui/Repository";
+import { startInWorktree, worktreeChats, type WorktreeChat, type WorktreeStart } from "./hermes/worktrees";
+import type { RepoApi } from "./hermes/repo";
+import { tauriRepo } from "./ui/tauriRepo";
+import { tauriScreenApps, type ScreenAppsInstaller } from "./ui/tauriScreenApps";
+import { ApplyDefaults, NewChatSettingsView } from "./ui/ProjectDefaultsNotes";
+import { appearanceStore } from "./ui/appearance";
+import { LocaleContext, useLocale } from "./i18n/locale";
+import { StatusBar } from "./ui/StatusBar";
+import { ApprovalsPill } from "./ui/ApprovalsPill";
+import { systemFonts } from "./ui/tauriFonts";
+import { SignIn } from "./ui/SignIn";
+import { Onboarding, type SetupMode } from "./ui/Onboarding";
+import { ModelControls } from "./ui/ModelPicker";
+import { PreviewPane } from "./ui/PreviewPane";
+import { stepHistory } from "./ui/previewHistory";
+import { PANE_MIN_WIDTH, SidePanel, type PanelTab } from "./ui/SidePanel";
+import { ScreenTab } from "./ui/Screen";
+import { LinksProvider, useOpenPreview } from "./ui/previewContext";
+import { tauriLocalFiles, tauriServerPages, tauriWebPages, type LocalFiles, type ServerPages, type WebPages } from "./ui/tauriPreview";
+import type { PreviewTarget } from "./hermes/preview";
+import { pathOpener } from "./hermes/paths";
+import type { Route } from "./hermes/pipe";
+import { tauriTray, type TrayWiring } from "./hermes/tauriTray";
+import { usePageHidden, useWindowHidden } from "./ui/windowState";
+import { getUIPrefs, setUIPrefs, subscribe as subscribeUIPrefs, toggleModelFavorite, type StickyModelPick } from "./hermes/uiPrefs";
+import { errorText } from "./hermes/values";
+import { BrandMark } from "./ui/BrandMark";
+
+/** Keeps the repository folder opened last, and the recent ones, on this computer (Repository screen, ADR 0110). */
+function rememberRepo(top: string) {
+  try {
+    localStorage.setItem(REPO_PATH_KEY, top);
+    localStorage.setItem(REPO_RECENT_KEY, JSON.stringify(remember(readRecent(localStorage.getItem(REPO_RECENT_KEY)), top)));
+  } catch {
+    // A full or unavailable localStorage only loses the memory of the folder.
+  }
+}
+
+/** Keeps a choice the owner made on this computer, such as an SSH target. */
+function rememberChoice(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // A full or unavailable localStorage only loses the memory of the choice; what it was for still goes ahead.
+  }
+}
+
+// xterm.js is loaded only once the Terminal is first opened.
+const TerminalTab = lazy(() => import("./ui/Terminal").then((m) => ({ default: m.TerminalTab })));
+
+// Hermes also announces store changes over the socket; the poll catches anything it misses.
+const SYNC_EVERY_MS = 60_000;
+// While the inbox is open it asks for fresh checks this often; they run at most every 15 seconds (transport.ts).
+const INBOX_CHECK_EVERY_MS = 30_000;
+const TOAST_MS = 5_000;
+const ACTION_TOAST_MS = 15_000;
+
+/**
+ * What to show in a chat once it opens: a card or message, or else the chat's waiting Approval; or the words a search
+ * across connections matched there (`hit`, everywhere.ts), which find-in-chat goes to.
+ */
+type LinkReveal = { itemId?: string; approval: boolean } | { hit: Hit };
+const hitOf = (reveal: LinkReveal | undefined): Hit | undefined => (reveal && "hit" in reveal ? reveal.hit : undefined);
+/** A short notice above the composer; `undo` puts back what it reports. `at` restarts the timer for a repeat. */
+type Toast = { text: string; undo?: () => void; action?: { label: string; run: () => void }; at: number };
+
+const withoutProfile = ({ profile: _profile, ...pick }: StickyModelPick): ModelPick => pick;
+
+/** Below this width the side panel's Server files drop columns and show a file below the list. */
+const PANEL_COMPACT_WIDTH = 640;
+/** The narrowest the chat gets beside the preview pane; narrower than this and the pane covers the chat instead. */
+const CHAT_MIN_WIDTH = 440;
+const PREVIEW_DEFAULT_WIDTH = 480;
+
+/** How the preview pane names the Hermes server: the SSH target, or the dashboard's host. */
+function serverLabel(route?: Route): string {
+  if (!route) return "the server";
+  if (route.kind === "ssh") return route.target;
+  try {
+    return new URL(route.url).host;
+  } catch {
+    return route.url;
+  }
+}
+
+/** An element's width as it changes; 0 where it can't be measured (as in tests). */
+function useWidth(ref: RefObject<HTMLElement | null>): number {
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    setWidth(el.clientWidth);
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return width;
+}
+
+let connectionStore: Connections | undefined;
+/** The saved connections, read (and the old single sign-in migrated) the first time they're needed. */
+const savedConnections = () => (connectionStore ??= new Connections(localStorage));
+
+/** How each connection's routes did lately, kept with the connection across restarts (routes.ts `RouteHealth`). */
+const routeHealth = new Map<string, RouteHealth>();
+const healthOf = (id: string) => routeHealth.get(id) ?? routeHealth.set(id, keptRouteHealth(savedConnections(), id)).get(id)!;
+/** The record of recent connection attempts, kept on disk between launches (attempts.ts, #270). */
+const connectionAttempts = new AttemptLog(tauriAttemptStore);
+/**
+ * A connection's pipe: its routes in order, and the server id the first route that names one reports kept (ADR 0120).
+ * Each opening is kept in the record of connection attempts. Rust is told the owner's limit, but never less than what
+ * is live now with this one: a lowered limit applies to the next Connect, and neither a live connection's reconnect nor
+ * signing in to one again closes the others.
+ */
+const pipeFor = (c: SavedConnection, d: SignInDetails) =>
+  tauriPipe(d, c.id, { onServer: (server) => savedConnections().setServer(c.id, server), health: healthOf(c.id), attempts: connectionAttempts }, () =>
+    Math.max(savedConnections().liveLimit(), liveConnections().size + (liveConnections().has(c.id) ? 0 : 1)),
+  );
+
+/** Each connection's inbox dismissals, read once per connection (inbox.ts `inboxAcks`). */
+const acksByConnection = new Map<string, InboxAcks>();
+const acksFor = (c: ScopeSource) => {
+  const scope = inboxScope(c);
+  return acksByConnection.get(scope) ?? acksByConnection.set(scope, inboxAcks(localStorage, scope)).get(scope)!;
+};
+
+/** Each connection and profile's Stop waiting choices, for a background connection's dispatched work (dispatched.ts). */
+const stopsByScope = new Map<string, StopWaitingStore>();
+const backgroundHandoffs = (c: SavedConnection, profile: string, chats: Chat[]) => {
+  const scope = projectScope(c, profile);
+  const stops = stopsByScope.get(scope) ?? stopsByScope.set(scope, new StopWaitingStore(localStorage, scope)).get(scope)!;
+  // The main screen keeps its own copy while the connection is the target: read what it wrote.
+  stops.reread();
+  const now = Date.now();
+  return { handoffs: handoffsOf(chats, stops.getSnapshot(), now), next: nextHandoffChange(chats, stops.getSnapshot(), now) };
+};
+
+let liveStore: LiveConnections | undefined;
+/** The live connections and the composer target (ADR 0125); which are live is kept for launch to open them again. */
+const liveConnections = () => (liveStore ??= new LiveConnections((ids) => savedConnections().setLive(ids), acksFor, backgroundHandoffs));
+
+/**
+ * A connection's desktop notifications. With more than one connection live, each names its server, so an Approval
+ * from a background connection says where it waits.
+ */
+const notifyFor = (c: SavedConnection): Notify => (n, actions) =>
+  desktopNotify(liveConnections().size > 1 ? { title: `${savedConnections().get(c.id)?.name ?? c.name}: ${n.title}`, body: n.body } : n, actions);
+
+/** The inbox entry for the waiting card a notification is about, so its click goes where the entry's would. */
+const noticeEntry = (card: NoticeCard): InboxEntry => ({
+  key: `notice ${card.profile} ${card.chatId} ${card.itemId}`,
+  kind: "approval",
+  profile: card.profile,
+  chatId: card.chatId,
+  title: card.title,
+  itemId: card.itemId,
+  at: 0,
+  summary: "",
+});
+
+const account: Account = {
+  get connections() {
+    return savedConnections();
+  },
+  secrets: systemSecrets,
+  connect: (c, d, signal) => connect(pipeFor(c, d), undefined, localChatCache(c), notifyFor(c), signal),
+  readSaved: (c, d, reason) => readSaved(pipeFor(c, d), reason, localChatCache(c), notifyFor(c)),
+  openSaved: (c, d) => openSaved(pipeFor(c, d), localChatCache(c), notifyFor(c)),
+};
+
+/** The sign-in methods a connection's server offers, read without signing in (ADR 0058). */
+const serverMethods = (d: SignInDetails) => readMethods((one, expect) => tauriReach(one, expect, true, true), d);
+
+/** Deletes what this computer keeps for a removed connection (forgetConnection.ts). */
+const forgetLocal = (c: SavedConnection) =>
+  forgetConnectionData(c, { defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, drafts: savedDrafts, afterwards: syncScreenshotOutbox });
+/** The stores a profile's rename moves and its delete forgets, beside this webview's storage (profileLocalData.ts). */
+const profileStores = () => ({ defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, drafts: savedDrafts });
+
+const savedDrafts = drafts(localStorage);
+/** Adds `text` to the Draft at `key`, after anything already there. */
+const keepDraft = (key: string, text: string) => {
+  const now = savedDrafts.get(key);
+  if (text) savedDrafts.set(key, now ? `${now}\n\n${text}` : text);
+};
+const savedConnectionRefs = connectionRefs(localStorage);
+const savedProjects = projectLinks(localStorage);
+/** Where a budget notification's click goes: Usage → Budgets on its connection, made the one shown first (ADR 0190). */
+const budgetOpener = new BudgetOpener();
+/** A budget watch per live connection (budgetWatch.ts), kept in step with them by `Screens`. */
+const budgetWatches = new BudgetWatches((id) => {
+  const m = liveConnections().get(id);
+  if (!m) return undefined;
+  const c = m.connection;
+  return {
+    io: m.hermes.usageIo(),
+    shelves: budgetShelves(localStorage, c),
+    notify: notifyFor(c),
+    open: () => () => budgetOpener.open(id),
+    connected: () => m.hermes.getSnapshot().status === "connected",
+    watchStatus: m.hermes.subscribe,
+    listProfiles: () => m.hermes.profiles(),
+    projects: (profile) => {
+      const s = savedProjects.read(projectScope(c, profile));
+      return { chats: s.chats, known: s.known };
+    },
+  };
+});
+const savedContextLedger = contextLedger(localStorage);
+const savedPersona = new PersonaStore(localStorage);
+// Applied as the app loads, so the chosen fonts show from the first screen.
+const appearance = appearanceStore(localStorage, document.documentElement);
+const backupEnv = savedBackupEnv(() => savedConnections().recent());
+
+/** The names of the extra request headers a sign-in sends; only a URL sends them. */
+const headerNames = (d: SignInDetails) =>
+  d.routes
+    ? [...new Set(d.routes.filter((r) => r.kind !== "ssh").flatMap((r) => (r.headers ?? []).map((h) => h.name.trim())))]
+    : d.mode === "url"
+      ? (d.headers ?? []).map((h) => h.name.trim())
+      : [];
+
+const BLANK: SignInDetails = { mode: "ssh", sshTarget: "", url: "", username: "", password: "", headers: [] };
+
+/**
+ * `d`, the sign-in `c` was made with, held to the server `c` knows now: a route may have reported it since `d` was read
+ * (ADR 0120). Only a connection with several routes is held to one.
+ */
+const withKnownServer = (c: SavedConnection, d: SignInDetails): SignInDetails => {
+  const server = savedConnections().get(c.id)?.server;
+  return d.routes && server ? { ...d, server } : d;
+};
+
+/**
+ * What launch ends in: signed in to the connection in use with its saved password, or the sign-in screen and why.
+ * `connection` absent there: none is in use (none saved, or the one in use was removed), so the owner picks one.
+ * `firstRun`: nothing is saved on this computer, so setup opens instead of the sign-in screen.
+ */
+type Launch = (
+  | { hermes: Hermes; connection: SavedConnection; details: SignInDetails; turnedDown?: Promise<string | undefined> }
+  | { connection?: SavedConnection; initial: SignInDetails; error?: SignInError; firstRun?: boolean }
+) & {
+  /** The other connections live when the app last ran, to open again in the background (ADR 0125). */
+  reopen?: SavedConnection[];
+};
+
+/**
+ * Setup, open over whatever else shows: where it was opened from, the connection it saves (`target`, a new one not
+ * saved yet when adding), and its name.
+ */
+type Setup = { mode: SetupMode; initial: SignInDetails; target: SavedConnection; name?: string };
+let launching: Promise<Launch> | undefined;
+
+/**
+ * Signs in to the connection in use with its saved password, if there is one. With a chat list saved for it, that
+ * shows at once while signing in runs, and `turnedDown` says if the password turns out wrong (ADR 0089). With none,
+ * signing in is waited for; if Hermes can't be reached, what this computer saved for it opens to read. If that fails
+ * the sign-in screen has it filled in, so Connect tries again.
+ * With no password saved, the sign-in screen asks for it. With no connection in use, the sign-in screen offers the
+ * saved ones and picks none, unless nothing is saved at all: then it's the first run, and setup opens. Runs once,
+ * though StrictMode runs effects twice.
+ */
+function launch(): Promise<Launch> {
+  return (launching ??= (async () => {
+    const c = account.connections.current();
+    // Read before the target opens, which keeps the live set anew.
+    const reopen = account.connections.liveLimit() > 1 ? account.connections.live().filter((x) => x.id !== c?.id) : [];
+    if (!c) return { initial: BLANK, firstRun: !account.connections.recent().length, reopen };
+    const read = await savedSignInOrForm(c, account);
+    if ("form" in read) return { connection: c, initial: read.form, reopen };
+    const saved = read.saved;
+    try {
+      return { ...(await launchOpen(c, saved, account)), connection: c, details: saved, reopen };
+    } catch (e) {
+      return { connection: c, initial: saved, error: signInError(e), reopen };
+    }
+  })());
+}
+
+/** The app in the language Settings → Appearance resolves to. A change re-renders in place; nothing remounts. */
+export default function App({ links = desktopLinks }: { links?: LinkInbox } = {}) {
+  const locale = useSyncExternalStore(appearance.subscribe, appearance.locale);
+  return (
+    <LocaleContext value={locale}>
+      <Screens links={links} />
+    </LocaleContext>
+  );
+}
+
+function Screens({ links }: { links: LinkInbox }) {
+  const [hermes, setHermes] = useState<Hermes | null>(null);
+  // The connection in use, or the one the sign-in screen is for; none when the owner hasn't picked one.
+  const [connection, setConnection] = useState<SavedConnection>();
+  // A chat link the desktop opened (ADR 0037). One that isn't a chat link says why at once, on any screen. A good one
+  // waits here until Main takes it, so it opens once signed in.
+  const arrived = useSyncExternalStore(links.subscribe, links.getSnapshot);
+  // Until the link the app was started with has been read, an empty inbox doesn't mean there's none, so Main, which
+  // decides at once whether to reopen the last chat, waits.
+  const linksReady = useSyncExternalStore(links.subscribe, links.isReady);
+  // `at` tells Main a newer link, one that can't open, replaced whatever an older link was doing.
+  const [badLink, setBadLink] = useState<{ reason: string; at: number }>();
+  const goodLink = useMemo(() => {
+    if (!arrived) return undefined;
+    const parsed = parseChatLink(arrived.raw);
+    return parsed.ok ? { link: parsed.link, at: arrived.at } : undefined;
+  }, [arrived]);
+  useEffect(() => {
+    if (!arrived) return;
+    const parsed = parseChatLink(arrived.raw);
+    if (parsed.ok) return setBadLink(undefined);
+    setBadLink({ reason: parsed.reason, at: arrived.at });
+    links.clear(arrived.at);
+  }, [arrived, links]);
+  const linkNotice = badLink ? (
+    <ChatLinkNotice view={{ kind: "error", text: `Highwing didn't open that link. ${badLink.reason}` }} onClose={() => setBadLink(undefined)} />
+  ) : (
+    goodLink &&
+    !hermes && (
+      <ChatLinkNotice
+        view={{ kind: "pending", text: `A chat link is waiting. It opens the chat in the ${goodLink.link.profile} profile once you're signed in. Nothing is sent.` }}
+        onClose={() => links.clear(goodLink.at)}
+      />
+    )
+  );
+  // The sign-in screen's details; none while launch is signing in with the saved password.
+  const [initial, setInitial] = useState<SignInDetails>();
+  const [error, setError] = useState<SignInError>();
+  // Why the keyring couldn't save the password at sign-in, shown once signed in.
+  const [notSaved, setNotSaved] = useState<string>();
+  const [kept, setKept] = useState<Kept>({ password: true, headers: true });
+  // Whether the main screen reopens the profile's last open chat: at launch, and on switching to a connection.
+  const [coldStart, setColdStart] = useState(true);
+  // The main screen has shown in this run. Only the first is the launch, which reopens a chat only with "Reopen last
+  // chat on launch" on (ADR 0162); any after it is a switch, a sign-in again, or a failed one putting the last back.
+  const [launched, setLaunched] = useState(false);
+  // Each profile's chat on screen in this run, by prefScope, kept across main screens: what a later one shows again.
+  const shownThisRun = useRef<ShownThisRun>(new Map()).current;
+  const mainShown = !!hermes && !!connection && linksReady;
+  useEffect(() => {
+    if (mainShown) setLaunched(true);
+  }, [mainShown]);
+  const [setup, setSetup] = useState<Setup>();
+  const setupRef = useRef(setup);
+  setupRef.current = setup;
+  // Moves on with everything the owner does on the sign-in screen, so a Run setup again still reading the keyring
+  // gives way to whatever was asked for after it.
+  const signInAsks = useRef(0);
+  const [confirmingSetup, setConfirmingSetup] = useState(false);
+  const connectionGuard = useRef<((to: SavedConnection) => Promise<boolean>) | undefined>(undefined);
+  // Main's question about an unsaved edit before the main screen changes under it; true when there is none or it goes.
+  const editGuard = useRef<(() => Promise<boolean>) | undefined>(undefined);
+  // A connection being switched to, for the screen shown meanwhile.
+  const [switchingTo, setSwitchingTo] = useState<SavedConnection>();
+  // Asked from the sign-in screen: remove this connection?
+  const [removing, setRemoving] = useState<SavedConnection>();
+  const [removingActive, setRemovingActive] = useState<SavedConnection>();
+  // Counts connections, so the main screen starts afresh for each one.
+  const [connections, setConnections] = useState(0);
+  const current = useRef<Hermes | null>(null);
+  current.current = hermes;
+  const connectionRef = useRef(connection);
+  connectionRef.current = connection;
+  // The sign-in the connection in use was made with, password and all, so setup can put it back if a new one fails,
+  // even when the keyring couldn't keep the password. The transport holds it anyway, to reconnect.
+  const signedInWith = useRef<SignInDetails>(undefined);
+  // The names of the extra request headers the connection sends, for Settings.
+  const [headers, setHeaders] = useState<string[]>([]);
+  const store = account.connections;
+  useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const recent = store.recent();
+  // Another window added, renamed or removed one.
+  useEffect(() => {
+    const changed = (e: StorageEvent) => (e.key === null || e.key === CONNECTIONS_KEY) && store.reread();
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [store]);
+
+  // Anything that opens a connection, or changes which one is the composer target, runs after the one before has
+  // finished: a later switch can never be overtaken by an earlier one, and two openings of one connection never race,
+  // since Rust keeps only the newer. `stale()`: a newer change was asked for meanwhile, so this one stops at its next
+  // step. Disconnecting a background connection only closes it, so it doesn't wait here.
+  const [serial] = useState(makeSerial);
+
+  // The live connections (ADR 0125). The target's `Hermes` is `hermes`; the others carry on in the background.
+  const registry = liveConnections();
+  useSyncExternalStore(registry.subscribe, registry.getSnapshot);
+  // Each live connection's budgets are checked while it is live, the target's and the background ones' alike.
+  useEffect(() => {
+    const sync = () => budgetWatches.sync(registry.list().map((m) => ({ id: m.connection.id, instance: m.hermes })));
+    sync();
+    return registry.subscribe(sync);
+  }, [registry]);
+  const overview = registry.overview();
+  // A message to open a chat on a live connection, once it is the target: an inbox entry or notification from a
+  // background connection, or a row of a search across them.
+  const [opening, setOpening] = useState<{ link: ChatLink; at: number; connection: string; reveal?: LinkReveal }>();
+  // Connect asked at the limit: the live connections to choose one to disconnect from.
+  const [atLimit, setAtLimit] = useState<SavedConnection>();
+  // A background connection with work under way, asked about before Disconnect closes it.
+  const [disconnecting, setDisconnecting] = useState<{ s: LiveSummary; hermes: Hermes }>();
+  // The connections launch is opening again in the background, until each has opened or failed.
+  const [reopening, setReopening] = useState<string[]>([]);
+
+  useEffect(() => {
+    void launch().then((l) => {
+      setConnection(l.connection);
+      if ("hermes" in l) {
+        signedInWith.current = l.details;
+        setHeaders(headerNames(l.details));
+        current.current = l.hermes;
+        registry.add({ connection: l.connection, hermes: l.hermes, details: l.details }, true);
+        setHermes(l.hermes);
+        // The saved password or token was turned down while the saved chats showed: the sign-in screen asks, as it
+        // would have without them, unless the owner has moved on meanwhile.
+        void l.turnedDown?.then((why) => {
+          if (why === undefined) return;
+          // `turnedDown` passes on only the sign-in's refusals.
+          if (current.current === l.hermes) return showSignIn(l.connection, l.details, { stage: "sign-in", message: why });
+          // The owner moved on meanwhile: the turned-down instance is closed, so it leaves the live set and asks later.
+          if (registry.get(l.connection.id)?.hermes !== l.hermes) return;
+          void closeLive(l.connection.id);
+          registry.needsSignIn(l.connection, why);
+        });
+      } else {
+        setInitial(l.initial);
+        setError(l.error);
+        if (l.firstRun) setSetup({ mode: "first-run", initial: BLANK, target: store.draft(BLANK) });
+      }
+      // Then the rest of the live set, one at a time, with saved passwords only: one that needs a password says so in
+      // the overview, and never asks by itself.
+      setReopening((l.reopen ?? []).map((c) => c.id));
+      for (const c of l.reopen ?? [])
+        void openInBackground(c)
+          .catch(() => {})
+          .finally(() => setReopening((ids) => ids.filter((id) => id !== c.id)));
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- launch runs once; `registry` is one for the app, and `showSignIn` and `openInBackground` are new functions each render
+  }, [store]);
+
+  /** Makes `h`, the instance for `c` opened with `d`, the composer target, or none; the main screen starts afresh. */
+  const makeTarget = (h: Hermes | null, c?: SavedConnection, d?: SignInDetails) => {
+    if (h && c && d) registry.add({ connection: c, hermes: h, details: d }, true);
+    else if (!h) registry.setTarget(undefined);
+    current.current = h;
+    setHermes(h);
+    setConnections((n) => n + 1);
+  };
+
+  /** Closes a live connection and takes it out of the live set. The caller decides what is shown instead. */
+  const closeLive = async (id: string | undefined) => {
+    if (id === undefined) return;
+    const m = registry.remove(id);
+    await m?.hermes.close().catch(() => {});
+  };
+
+  /** Whether connecting `c` would keep the others live: the owner allows more than one, and `c` isn't live already. */
+  const keepsOthers = () => store.liveLimit() > 1;
+  /**
+   * Whether connecting `c` is refused at the limit. At a limit of 1 a connect replaces the target, as before, unless
+   * background connections are still live from a higher limit: closing nothing to make room, it is refused then too.
+   */
+  const full = (c: SavedConnection) =>
+    !registry.has(c.id) && (keepsOthers() ? registry.size >= store.liveLimit() : registry.list().some((m) => m !== registry.target()));
+
+  /**
+   * Opens `c` with its saved sign-in as a background connection, leaving the target as it is. Without a saved password,
+   * or if it is turned down, it is listed as needing to sign in. Refused at the limit.
+   */
+  const openInBackground = (c: SavedConnection) =>
+    serial.after(async () => {
+      if (registry.has(c.id)) return;
+      if (full(c)) return setAtLimit(c);
+      const read = await savedSignInOrForm(c, account);
+      if ("form" in read) return registry.needsSignIn(c, `No ${c.method === "token" ? "token" : "password"} is saved for it.`);
+      try {
+        const h = await launchSignIn(c, read.saved, account);
+        if (registry.has(c.id)) return void (await h.close().catch(() => {}));
+        registry.add({ connection: store.get(c.id) ?? c, hermes: h, details: read.saved }, false);
+      } catch (e) {
+        registry.needsSignIn(c, errorText(e));
+      }
+    });
+
+  /** Disconnects a background connection: closes it alone. Nothing else changes: not the target, nor its drafts or queues. */
+  const disconnect = (c: SavedConnection) => {
+    if (registry.target()?.connection.id === c.id) return;
+    // What is under way there is named first, as before leaving a connection (ADR 0112); nothing waits otherwise.
+    const s = registry.overview().find((x) => x.id === c.id);
+    const m = registry.get(c.id);
+    if (s && m && (s.underWay.waiting || s.underWay.running)) return setDisconnecting({ s, hermes: m.hermes });
+    void closeLive(c.id);
+  };
+
+  // On a fallback route, the routes before it are checked now and then without the password, and the connection
+  // moves back to one that answers once nothing is running (ADR 0120).
+  useEffect(() => {
+    const d = signedInWith.current;
+    const id = connection?.id;
+    if (!hermes || !id || !d?.routes || routesOf(d).filter((r) => !r.off).length < 2) return;
+    return new PreferredRoutes(hermes, d, reachRoute, healthOf(id), () => store.get(id)?.server ?? d.server).start();
+  }, [hermes, connection?.id, store]);
+
+  /** The sign-in screen, for `c` with `d` filled in, or with none picked. */
+  const showSignIn = (c: SavedConnection | undefined, d: SignInDetails = BLANK, why?: SignInError) => {
+    // The connection asking to sign in again leaves the live set; any other stays live, in the background.
+    const t = registry.target();
+    if (t && t.connection.id === c?.id) void closeLive(t.connection.id);
+    registry.setTarget(undefined);
+    signedInWith.current = undefined;
+    current.current = null;
+    setHermes(null);
+    setConnection(c);
+    setNotSaved(undefined);
+    setKept({ password: true, headers: true });
+    setInitial(d);
+    setError(why);
+  };
+
+  /**
+   * Leaves the connection in use for `target`, which signs in with its saved password, or Offline with what this
+   * computer saved for it. Without a saved password, or if signing in fails, the sign-in screen asks for `target`.
+   * The connection left behind is closed first; Hermes keeps its running replies going on the server.
+   */
+  const switchTo = (target: SavedConnection) =>
+    serial(async (stale) => {
+      if (stale()) return;
+      const shownAs = (h: Hermes, d: SignInDetails) => {
+        store.use(target.id);
+        signedInWith.current = d;
+        const c = store.get(target.id) ?? target;
+        setConnection(c);
+        setHeaders(headerNames(d));
+        setNotSaved(undefined);
+        setKept({ password: true, headers: true });
+        setError(undefined);
+        // The connection's own last open chat, in the profile it showed last.
+        setColdStart(true);
+        // A switch this one overtook, to a connection still opening, leaves no "Connecting to…" behind.
+        setSwitchingTo(undefined);
+        makeTarget(h, c, d);
+      };
+      // Live already: the target moves to it, and nothing closes or reconnects (ADR 0125).
+      const live = registry.get(target.id);
+      if (live) return shownAs(live.hermes, live.details);
+      if (full(target)) return setAtLimit(target);
+      setSwitchingTo(target);
+      try {
+        // With room for one connection only, the one in use closes first, as before.
+        if (!keepsOthers()) await closeLive(registry.target()?.connection.id);
+        setHermes(null);
+        registry.setTarget(undefined);
+        const read = await savedSignInOrForm(target, account);
+        if (stale()) return;
+        if ("form" in read) return showSignIn(target, read.form);
+        const d = read.saved;
+        try {
+          const h = await launchSignIn(target, d, account);
+          if (stale()) return void (await h.close().catch(() => {}));
+          shownAs(h, d);
+        } catch (e) {
+          if (!stale()) showSignIn(target, d, signInError(e));
+        }
+      } finally {
+        if (!stale()) setSwitchingTo(undefined);
+      }
+    });
+
+  /**
+   * Setup's Save and connect, and the sign-in screen's Connect: signs in to `target` with `d`, and keeps it. The
+   * connection in use closes first, or its reconnects would take Rust's one connection back. If the new one fails
+   * after all, the one in use before is put back, as at launch: Offline with what this computer saved if it can't
+   * connect either. `signal` is Setup's Stop: while Hermes hasn't answered, it stops the sign-in, which then fails
+   * with nothing saved, and the one in use before is put back the same way.
+   */
+  const connectWith = async (target: SavedConnection, d: SignInDetails, name?: string, signal?: AbortSignal) => {
+    // Setup can spend minutes testing while more work or approvals arrive. Ask at the actual switch, using Main's
+    // latest state, and keep Setup mounted but hidden so cancelling the question keeps its tested details.
+    if (setup && current.current && connectionGuard.current) {
+      setConfirmingSetup(true);
+      try {
+        if (!(await connectionGuard.current({ ...target, name: name?.trim() || target.name })))
+          throw new Error("Connection unchanged. You can continue setup when you are ready.");
+      } finally {
+        setConfirmingSetup(false);
+      }
+    }
+    // Stopped while it waits its turn: it never starts, and the connection in use isn't touched.
+    return serial.stoppable(signal, () => new Error(CONNECT_STOPPED), async (stale) => {
+      if (stale()) throw new Error("A newer connection was selected.");
+      if (full(target)) throw new Error(atLimitText(store.liveLimit()));
+      const before = current.current;
+      const beforeConnection = connectionRef.current;
+      const beforeDetails = signedInWith.current;
+      // The connection signed in again closes first. Another one in use carries on in the background, unless there is
+      // room for only one.
+      // At a limit of 1 the target gives way to a connection that wasn't live; one live already replaces only itself.
+      const closesBefore = !!before && (beforeConnection?.id === target.id || (!keepsOthers() && !registry.has(target.id)));
+      if (closesBefore) await closeLive(beforeConnection?.id);
+      if (registry.has(target.id)) await closeLive(target.id);
+      try {
+        const { hermes: h, connection: c, notSaved, kept } = await signIn(target, d, account, name, signal);
+        if (stale()) {
+          await h.close().catch(() => {});
+          makeTarget(null);
+          throw new Error("A newer connection was selected.");
+        }
+        setNotSaved(notSaved);
+        setKept(kept);
+        setHeaders(headerNames(d));
+        setError(undefined);
+        // The last chat open was on the connection before, or this one as it was before the change.
+        setColdStart(!before || beforeConnection?.id !== c.id);
+        signedInWith.current = d;
+        setConnection(c);
+        makeTarget(h, c, d);
+        return { notSaved, kept };
+      } catch (e) {
+        if (!stale() && before && beforeConnection && !closesBefore && registry.get(beforeConnection.id)?.hermes === before) {
+          // It was never closed: it is the target again.
+          makeTarget(before, beforeConnection, beforeDetails ?? registry.get(beforeConnection.id)!.details);
+        } else if (!stale() && before && beforeConnection) {
+          const read = beforeDetails ? { saved: beforeDetails } : await savedSignInOrForm(beforeConnection, account);
+          const previous = "saved" in read ? read.saved : undefined;
+          const back = previous ? await launchSignIn(beforeConnection, previous, account).catch(() => null) : null;
+          if (back && previous) setHeaders(headerNames(previous));
+          if (!back) {
+            signedInWith.current = undefined;
+            setInitial("form" in read ? read.form : await signInForm(beforeConnection, account));
+          }
+          makeTarget(back, beforeConnection, previous);
+        }
+        throw e;
+      }
+    });
+  };
+
+  /**
+   * Removes a saved connection (account.ts `removeConnection`). The one in use is signed out of first; then the
+   * sign-in screen offers the others and picks none, or setup opens when none is left.
+   */
+  const removeSaved = (c: SavedConnection) =>
+    serial(async () => {
+      const inUse = connectionRef.current?.id === c.id;
+      // Live in the background: only it closes, before its keyring entries and data go (ADR 0125).
+      if (!inUse) await closeLive(c.id);
+      let closed = false;
+      try {
+        await removeConnection(c, account, forgetLocal, inUse ? async () => {
+          await closeLive(c.id);
+          closed = true;
+          setRemovingActive(c);
+          setInitial(undefined);
+          makeTarget(null);
+        } : undefined);
+      } catch (e) {
+        if (closed) showSignIn(c, await signInForm(c, account), `Couldn't finish removing this connection: ${errorText(e)}. Its remaining local data is still saved. Try removing it again, or sign in.`);
+        throw e;
+      } finally {
+        setRemovingActive(undefined);
+      }
+      if (!inUse) return;
+      showSignIn(undefined);
+      setColdStart(false);
+      if (!store.recent().length) setSetup({ mode: "first-run", initial: BLANK, target: store.draft(BLANK) });
+    });
+
+  const setupLayer = setup && (
+    <div hidden={confirmingSetup} inert={confirmingSetup}>
+      <Onboarding
+        key={`${setup.mode}:${setup.target.id}`}
+        mode={setup.mode}
+        initial={setup.initial}
+        initialName={setup.name}
+        probe={tauriProbe}
+        reach={tauriReach}
+        readMethods={serverMethods}
+        hermes={hermes ?? undefined}
+        onConnect={(d, name, signal) => connectWith(setup.target, d, name, signal)}
+        onCancel={setup.mode === "first-run" ? undefined : () => setSetup(undefined)}
+        onDone={() => setSetup(undefined)}
+      />
+    </div>
+  );
+
+  /** Setup to change `c`: from the sign-in it is using, if it's the one in use, header values and all but the password. */
+  const editConnection = async (c: SavedConnection) => {
+    const now = c.id === connectionRef.current?.id && signedInWith.current ? withKnownServer(c, { ...signedInWith.current, password: "", token: undefined }) : await signInForm(c, account);
+    // ServerFields clears the header values if the URL changes, so they never go to another server.
+    setSetup({ mode: c.id === connectionRef.current?.id && current.current ? "reconfigure" : "edit", initial: now, target: c, name: c.name });
+  };
+
+  // Updates: checked once as the app starts, if the owner wants that. Back in the window, a package update waiting to be
+  // installed looks again for pacman having installed it, which the owner does in a terminal.
+  useEffect(() => {
+    if (getUIPrefs().checkUpdatesOnLaunch && appUpdates.getSnapshot().state === "idle") void appUpdates.check();
+    const onFocus = () => void appUpdates.check({ installedOnly: true });
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  // A chat link for another live connection makes that one the target first (ADR 0125); Main then opens it. One for a
+  // connection launch is still opening in the background waits for it, so the target doesn't turn it away meanwhile.
+  const linkKey = goodLink && savedConnectionRefs.resolve(goodLink.link.connection);
+  const linkOwner = linkKey !== undefined ? registry.list().find((m) => connectionKey(m.connection) === linkKey) : undefined;
+  const linkElsewhere = !!linkOwner && linkOwner.connection.id !== connection?.id;
+  const linkAwaits = !linkOwner && linkKey !== undefined && reopening.some((id) => { const c = store.get(id); return !!c && connectionKey(c) === linkKey; });
+  useEffect(() => {
+    if (!linkOwner || !linkElsewhere || !goodLink) return;
+    const at = goodLink.at;
+    // An unsaved edit in Settings asks first, as any other way of leaving the main screen does; Keep editing drops the link.
+    void (editGuard.current?.() ?? Promise.resolve(true)).then((go) => {
+      // A newer link replaced this one while the owner was asked: it no longer moves anything.
+      if (links.getSnapshot()?.at !== at) return;
+      if (go) void switchTo(linkOwner.connection);
+      else links.clear(at);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once per arrived link, and again once its connection is live
+  }, [goodLink?.at, linkOwner?.connection.id]);
+  const linkHere = opening && opening.connection === connection?.id ? opening : linkElsewhere || linkAwaits ? undefined : goodLink;
+
+  /**
+   * Opens a chat on a live connection, whichever profile it is in. Its connection becomes the composer target if it
+   * isn't, and Main opens the chat as it opens a chat link: looked up first, asking before it leaves a profile
+   * (ADR 0037). Nothing happens when the connection is no longer live.
+   */
+  const openAt = (ref: ChatRef, reveal?: LinkReveal) => {
+    const m = registry.resolve(ref);
+    if (!m) return;
+    setOpening({
+      link: { connection: savedConnectionRefs.refFor(m.connection), profile: ref.profile, chatId: ref.chatId },
+      at: Date.now(),
+      connection: m.connection.id,
+      ...(reveal && { reveal }),
+    });
+    if (registry.target() !== m) void switchTo(m.connection);
+  };
+  /** An inbox entry on a background connection: that connection becomes the target, and its chat opens there. */
+  const openElsewhere = (e: InboxEntry) => {
+    const approval = e.kind === "approval" && !e.ended;
+    if (e.server) openAt({ connection: e.server.id, profile: e.profile, chatId: e.chatId }, e.itemId || approval ? { itemId: e.itemId, approval } : undefined);
+  };
+  // A notification clicked from a background connection opens its chat there, as its inbox entry does. The target's
+  // own notifications are Main's.
+  const openElsewhereRef = useRef(openElsewhere);
+  openElsewhereRef.current = openElsewhere;
+  // A budget notification from a background connection makes it the target; its Budgets open once it shows. An unsaved
+  // edit asks first, as a chat link to another connection does; Keep editing drops the opening.
+  const switchToRef = useRef(switchTo);
+  switchToRef.current = switchTo;
+  useEffect(() => {
+    budgetOpener.switchTo = (id) => {
+      const m = registry.get(id);
+      if (!m) return budgetOpener.cancel(id);
+      void (editGuard.current?.() ?? Promise.resolve(true)).then((go) => (go ? void switchToRef.current(m.connection) : budgetOpener.cancel(id)));
+    };
+    return () => void (budgetOpener.switchTo = undefined);
+  }, [registry]);
+  useEffect(() => {
+    const stops = registry.list().map((m) =>
+      m.hermes.onNoticeOpen((card) => {
+        if (registry.target()?.hermes !== m.hermes) openElsewhereRef.current({ ...noticeEntry(card), server: { id: m.connection.id, name: m.connection.name } });
+      }),
+    );
+    return () => stops.forEach((stop) => stop());
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- again whenever the live connections change; `registry` is one store for the app
+  }, [registry.getSnapshot()]);
+  /** Dismisses background connections' entries in their own connections' dismissals. */
+  const dismissElsewhere = (es: InboxEntry[]) => {
+    for (const s of overview) {
+      const mine = es.filter((e) => e.server?.id === s.id);
+      const m = registry.get(s.id);
+      if (m && mine.length) acksFor(m.connection).dismissAll(mine.map(withoutServer), s.entries.map(withoutServer));
+    }
+  };
+  // The question is about one background instance: once that connection is the target, or opened again, it no longer
+  // applies, and Disconnect anyway closes nothing.
+  const stillAsked = (d: { s: LiveSummary; hermes: Hermes }) => registry.get(d.s.id)?.hermes === d.hermes && registry.target()?.connection.id !== d.s.id;
+  const disconnectAsk = disconnecting && stillAsked(disconnecting) && (
+    <DisconnectConnection
+      s={disconnecting.s}
+      onStay={() => setDisconnecting(undefined)}
+      onGo={() => {
+        setDisconnecting(undefined);
+        if (stillAsked(disconnecting)) void closeLive(disconnecting.s.id);
+      }}
+    />
+  );
+  const atLimitAsk = atLimit && (
+    <AtConnectionLimit
+      to={atLimit}
+      limit={store.liveLimit()}
+      live={overview.filter((o) => !o.target && o.status !== "needs-sign-in")}
+      onDisconnect={(id) => {
+        const c = store.get(id);
+        if (c) disconnect(c);
+      }}
+      onClose={() => setAtLimit(undefined)}
+    />
+  );
+
+  if (hermes && connection && linksReady)
+    return (
+      <>
+        <Main
+          key={connections}
+          hermes={hermes}
+          connection={connection}
+          saved={recent}
+          savedUnsaved={store.unsaved}
+          headers={headers}
+          notSaved={notSaved}
+          kept={kept}
+          shown={shownThisRun}
+          reopenLast={coldStart && !linkHere ? (launched ? "switch" : "launch") : undefined}
+          covered={!!setup && !confirmingSetup}
+          link={linkHere}
+          linkSuperseded={badLink?.at}
+          onLinkTaken={(at) => (opening?.at === at ? setOpening(undefined) : links.clear(at))}
+          servers={overview}
+          liveLimit={store.liveLimit()}
+          onLiveLimit={(n) => store.setLiveLimit(n)}
+          onConnectBackground={(c) => void openInBackground(c)}
+          onDisconnect={disconnect}
+          onOpenElsewhere={openElsewhere}
+          onDismissElsewhere={dismissElsewhere}
+          everywhere={{
+            run: (f, signal, onUpdate) => searchEverywhere(f, { live: registry, signal, onUpdate }),
+            open: (row) => openAt(row.ref, { hit: row.hit }),
+          }}
+          connectionGuard={connectionGuard}
+          editGuard={editGuard}
+          onSetUp={() => void editConnection(connection)}
+          onSwitchConnection={(c) => void switchTo(c)}
+          onAddConnection={() => setSetup({ mode: "add", initial: BLANK, target: store.draft(BLANK) })}
+          onEditConnection={(c) => void editConnection(c)}
+          onRenameConnection={(c, name) => {
+            store.rename(c.id, name);
+            if (c.id === connection.id) setConnection(store.get(c.id));
+          }}
+          onRemoveConnection={removeSaved}
+          onTestConnection={async (c) => {
+            const d = c.id === connection.id && signedInWith.current ? withKnownServer(c, signedInWith.current) : await savedSignIn(c, account);
+            if (!d) throw new Error(`No ${c.method === "token" ? "token" : "password"} is saved for this connection, so it can't be tested. Edit it to sign in again.`);
+            return testSignIn(tauriProbe, d);
+          }}
+          onSignOut={() =>
+            serial(async () => {
+              // Everything is read first, then shown at once: the sign-in screen keeps the details it mounts with.
+              registry.remove(connection.id);
+              const { initial, error } = await signOutToSignIn(hermes, connection, account);
+              setColdStart(false);
+              showSignIn(connection, initial, error);
+            })
+          }
+        />
+        {setupLayer}
+        {linkNotice}
+        {atLimitAsk}
+        {disconnectAsk}
+      </>
+    );
+  // Setup keeps Main's slot order (Main, then setup), so finishing sign-in doesn't remount it at its first step.
+  if (setupLayer)
+    return (
+      <>
+        {null}
+        {setupLayer}
+        {linkNotice}
+      </>
+    );
+  if (!initial || hermes || switchingTo || removingActive)
+    return (
+      <div className="first-run">
+        <div className="first-run-card">
+          <div className="rail-brand big"><BrandMark /></div>
+          <p className="muted" role="status">
+            {removingActive ? `Removing ${removingActive.name}…` : switchingTo ? `Connecting to ${switchingTo.name}…` : "Signing in…"}
+          </p>
+        </div>
+        {linkNotice}
+      </div>
+    );
+  return (
+    <>
+      {linkNotice}
+      <SignIn
+        key={connection?.id ?? "none"}
+        initial={initial}
+        error={error}
+        connection={connection}
+        connections={recent}
+        readMethods={serverMethods}
+        onSetUp={() => {
+          signInAsks.current++;
+          setSetup({ mode: "sign-in", initial: BLANK, target: store.draft(BLANK) });
+        }}
+        onRerunSetup={(c) => {
+          const mine = ++signInAsks.current;
+          void serial(async (stale) => {
+            // From what is saved for it, as Edit does. Setup opens only if nothing else was asked for meanwhile: the
+            // screen is still for `c`, nothing signed in, and no other setup opened.
+            const d = await signInForm(c, account);
+            if (stale() || mine !== signInAsks.current || setupRef.current || current.current || connectionRef.current?.id !== c.id) return;
+            setSetup({ mode: "edit", initial: d, target: c, name: c.name });
+          });
+        }}
+        live={overview}
+        onPick={(c) => {
+          signInAsks.current++;
+          // A live connection is in use at once: picking it makes it the target (ADR 0125).
+          if (registry.has(c.id)) return void switchTo(c);
+          void serial(async (stale) => {
+            const read = await savedSignInOrForm(c, account);
+            const d = "saved" in read ? read.saved : read.form;
+            if (!stale()) showSignIn(c, d);
+          });
+        }}
+        onRemove={(c) => {
+          signInAsks.current++;
+          setRemoving(c);
+        }}
+        onSignIn={async (d) => {
+          if (!connection) return;
+          signInAsks.current++;
+          setError(undefined);
+          try {
+            await connectWith(connection, d);
+          } catch (e) {
+            setError(signInError(e));
+          }
+        }}
+      />
+      {atLimitAsk}
+      {disconnectAsk}
+      {removing && (
+        <RemoveConnection
+          c={removing}
+          inUse={false}
+          onCancel={() => setRemoving(undefined)}
+          onRemove={async () => {
+            await removeSaved(removing);
+            setRemoving(undefined);
+            if (removing.id === connectionRef.current?.id) showSignIn(undefined);
+            if (!store.recent().length) setSetup({ mode: "first-run", initial: BLANK, target: store.draft(BLANK) });
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * One pane of the chat area. `chatId` null: the New chat pane. `tabs`: the chats open in the pane's tabs, `chatId`'s
+ * among them (Tabs.tsx). `draftError`: why the New chat pane couldn't start a chat. `picked`: the search result its chat
+ * was opened from; `at` tells one pick from the next.
+ */
+type Pane = {
+  key: string;
+  view: number;
+  chatId: string | null;
+  tabs: (string | null)[];
+  draftError?: string;
+  picked?: { found: Found; at: number };
+  jump?: JumpTarget;
+  /** A subagent of the chat `chatId` to open in its Subagents panel, from the agent office; `at` tells one request from the next. */
+  subagent?: { chatId: string; id: SubagentId; at: number };
+  /** The worktree a New chat pane starts its chat in, picked in the Repository screen (ADR 0043). */
+  worktree?: WorktreeStart;
+};
+
+/** Compare (ADR 0101): two panes whose sends go to both. Each side is a pane and the chat it shows; `model` is what a side's New chat pane starts on. */
+type CompareSide = { pane: string; chatId: string | null; model?: ModelPick };
+type Compare = readonly [CompareSide, CompareSide];
+
+/**
+ * Starts a pane's chat if it hasn't started, and sends to it. `mirrored`: the message was typed in the other compared
+ * pane, so this pane's own draft stays as it is. Resolves whether the message reached the chat's outbox.
+ */
+type Deliver = (text: string, attachments: Attachment[], skill: SkillCall | undefined, mirrored: boolean, references: SentReference[]) => Promise<boolean>;
+
+let panesMade = 0;
+/** A pane's key, which is also its name to Hermes for what is on screen (transport.ts `open`). */
+const newPaneKey = () => `pane-${++panesMade}`;
+let viewsMade = 0;
+/** A pane's `view`: new each time what the pane shows changes, but not when only its tabs do, so a chat starting in the
+ * pane can tell the owner went elsewhere from a tab closing beside it. */
+const newView = () => ++viewsMade;
+
+/** Why a pane went to the New chat pane on its own: its chat left the list. */
+const CHAT_LEFT_LIST = "The chat open here is no longer on Hermes: it was deleted elsewhere. Anything you typed in it is kept below, and sending it starts a new chat.";
+
+/** The chat a pane on the New chat pane shows: nothing yet, or why the chat couldn't start. */
+const draftChat = (draftError?: string): Chat => ({
+  id: "draft",
+  title: "New chat",
+  source: "app",
+  settled: false,
+  updatedAt: Date.now(),
+  items: draftError ? [{ kind: "error", id: "e-draft", text: draftError }] : [],
+});
+/** What the desktop is told when a desktop shortcut's screenshot is attached while Hermes Chat isn't focused. */
+const SCREENSHOT_ATTACHED = { title: "Screenshot attached", body: "Review it in Highwing before you send it." };
+
+/** The real screenshot calls, and what a desktop shortcut does once its screenshot is attached. */
+export type Screenshots = {
+  api: ScreenshotApi;
+  syncOutbox?: () => Promise<void>;
+  /** Calls `fn` whenever a desktop shortcut asks for a screenshot; returns the function that stops it. */
+  onDesktopShortcut: (fn: () => void) => () => void;
+  /** A desktop shortcut's screenshot was attached: bring the window forward, and say so if it still isn't focused. */
+  attached: () => void;
+  /** How screenshots are taken on this desktop, for Settings. */
+  support?: () => Promise<ScreenshotSupport>;
+};
+const tauriScreenshotWiring: Screenshots = {
+  api: tauriScreenshots,
+  syncOutbox: syncScreenshotOutbox,
+  onDesktopShortcut: onDesktopScreenshot,
+  support: screenshotSupport,
+  attached: () =>
+    void showWindow().then(() => {
+      if (!document.hasFocus()) void desktopNotify(SCREENSHOT_ATTACHED).catch(() => {});
+    }),
+};
+
+/** Each profile's chat on screen in this run, by prefScope; null: the New chat pane. */
+type ShownThisRun = Map<string, string | null>;
+
+export function Main({
+  hermes,
+  connection: given,
+  headers = [],
+  notSaved,
+  kept = { password: true, headers: true },
+  reopenLast,
+  shown,
+  covered = false,
+  onSetUp,
+  saved = [],
+  savedUnsaved = false,
+  onSwitchConnection,
+  onAddConnection,
+  onEditConnection,
+  onRenameConnection,
+  onRemoveConnection,
+  onTestConnection,
+  connectionGuard,
+  editGuard,
+  localFiles = tauriLocalFiles,
+  webPages = tauriWebPages,
+  serverPages = tauriServerPages,
+  screenshots = tauriScreenshotWiring,
+  summon = desktopSummon,
+  personaStore = savedPersona,
+  guardClose = tauriCloseGuard,
+  onSignOut,
+  updates = appUpdates,
+  link,
+  linkSuperseded,
+  onLinkTaken,
+  refs = savedConnectionRefs,
+  tray = tauriTray,
+  repoApi = tauriRepo,
+  screenApps = tauriScreenApps,
+  localStt = tauriLocalStt,
+  servers = [],
+  liveLimit,
+  onLiveLimit,
+  onConnectBackground,
+  onDisconnect,
+  onOpenElsewhere,
+  onDismissElsewhere,
+  everywhere,
+}: {
+  /**
+   * Every live connection's summary, this one first (ADR 0125): the overview, the rail's counts, and the background
+   * connections' inbox entries. One entry, or none, when only this connection is live.
+   */
+  servers?: LiveSummary[];
+  /** How many connections may be live at once, and setting it. */
+  liveLimit?: number;
+  onLiveLimit?: (n: number) => void;
+  /** Opens `c` in the background, leaving this connection the target. */
+  onConnectBackground?: (c: SavedConnection) => void;
+  /** Closes a background connection. */
+  onDisconnect?: (c: SavedConnection) => void;
+  /** An inbox entry on a background connection: makes that connection the target and opens the chat there. */
+  onOpenElsewhere?: (e: InboxEntry) => void;
+  /** Dismisses background connections' entries. */
+  onDismissElsewhere?: (es: InboxEntry[]) => void;
+  /**
+   * Search's Everywhere scope (everywhere.ts): `run` searches every profile of every live connection, and `open` opens
+   * a row's chat on its connection and profile, at the words it matched. None: Search has this profile only.
+   */
+  everywhere?: {
+    run: (f: EverywhereFilter, signal: AbortSignal, onUpdate: (o: EverywhereOutcome) => void) => Promise<EverywhereOutcome>;
+    open: (row: EverywhereRow) => void;
+  };
+  hermes: Hermes;
+  /** The saved connection in use (connections.ts); a bare sign-in (in tests) is keyed by its address, as before. */
+  connection: SavedConnection | SavedSignIn;
+  /** Every saved connection, most recently used first, for the recent-connection picker and the manager. */
+  saved?: SavedConnection[];
+  /** The connection list's last change couldn't be stored. */
+  savedUnsaved?: boolean;
+  /** Leaves this connection for another, once the owner has agreed to leave whatever is running here. */
+  onSwitchConnection?: (c: SavedConnection) => void;
+  onAddConnection?: () => void;
+  /** Opens setup for `c`; for another connection than this one, once the owner has agreed to leave. */
+  onEditConnection?: (c: SavedConnection) => void;
+  onRenameConnection?: (c: SavedConnection, name: string) => void;
+  /** Removes `c`; signs out first when it's this one. Rejects with why it couldn't. */
+  onRemoveConnection?: (c: SavedConnection) => Promise<void>;
+  /** Tests `c` with its saved sign-in; rejects when it has none. */
+  onTestConnection?: (c: SavedConnection) => Promise<TestOutcome>;
+  /** Setup asks the current screen immediately before replacing its connection. */
+  connectionGuard?: RefObject<((to: SavedConnection) => Promise<boolean>) | undefined>;
+  /** Asks about an unsaved edit before the main screen is replaced by another live connection's (ADR 0125). */
+  editGuard?: RefObject<(() => Promise<boolean>) | undefined>;
+  /** The names of the extra request headers the connection sends. */
+  headers?: string[];
+  notSaved?: string;
+  /** What the keyring kept at sign-in. */
+  kept?: Kept;
+  /**
+   * Open the profile's last open chat if chatToReopen says to: "launch" for the first main screen of the run, "switch"
+   * for any after it.
+   */
+  reopenLast?: ReopenOn;
+  /**
+   * Each profile's chat on screen in this run, by prefScope (null: the New chat pane), kept by App across main screens.
+   * A "switch" shows a profile's again rather than the stored last open chat, which may be from before the launch.
+   */
+  shown?: ShownThisRun;
+  /** Setup is open over the app: nothing here takes focus or keys. */
+  covered?: boolean;
+  /** Opens setup from Settings. */
+  onSetUp?: () => void;
+  localFiles?: LocalFiles;
+  webPages?: WebPages;
+  /** Pages on the Hermes server's own loopback, through SSH (ADR 0114). */
+  serverPages?: ServerPages;
+  screenshots?: Screenshots;
+  /** The Repository screen's helper over ssh, and worktrees' (ADR 0110, 0043). */
+  repoApi?: RepoApi;
+  /** The Screen's install of a terminal and a text editor over the connection's ssh (ADR 0193). */
+  screenApps?: ScreenAppsInstaller;
+  /** Speech to text on this computer and where each recording goes, decided by Rust (ADR 0065, 0067). */
+  localStt?: LocalSttApi;
+  /** Tells the window `hermes-chat --show` or `--toggle` brought it forward; none outside the desktop app. */
+  summon?: SummonApi;
+  /** Where Settings → Persona keeps unsaved edits and replaced versions on this computer. */
+  personaStore?: PersonaStore;
+  /** Asks before the window closes; registered only while Settings → Persona holds an unsaved edit. */
+  guardClose?: CloseGuard;
+  onSignOut: () => Promise<void>;
+  updates?: Updater;
+  /**
+   * A chat link to open (ADR 0037); `at` tells one from the next. Main takes it with `onLinkTaken`. `reveal`: what to
+   * show once the chat is open, for an inbox entry or notification from a background connection, or a search's hit.
+   */
+  link?: { link: ChatLink; at: number; reveal?: LinkReveal };
+  onLinkTaken?: (at: number) => void;
+  /** When a newer link that can't open arrived: it replaces whatever an older link was doing, notice and all. */
+  linkSuperseded?: number;
+  /** The connection references chat links name (chatLinks.ts). */
+  refs?: ConnectionRefs;
+  /** The tray icon and Close to tray (tray.rs, ADR 0034). */
+  tray?: TrayWiring;
+}) {
+  const connection: SavedConnection = "id" in given ? given : { ...given, id: "", name: defaultName(given), addedAt: 0 };
+  const words = useLocale();
+  const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, live, models, switching, branchNews, bots, botPictures, defaultName: defaultProfileName } = useSyncExternalStore(
+    hermes.subscribe,
+    hermes.getSnapshot,
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Settings → Persona holds an edit Hermes doesn't have, or a save under way: leaving it asks first.
+  const personaDirty = useRef(false);
+  const [personaUnsaved, setPersonaUnsaved] = useState(false);
+  // This computer could keep the unsaved edit, so leaving doesn't lose it.
+  const [personaKept, setPersonaKept] = useState(true);
+  // The profile whose persona is open: Settings → Persona can edit any profile's, not only the one in use.
+  const [personaProfile, setPersonaProfile] = useState<string>();
+  const onPersonaDirty = useCallback((dirty: boolean, kept: boolean, profile: string) => {
+    personaDirty.current = dirty;
+    setPersonaUnsaved(dirty);
+    setPersonaKept(kept);
+    setPersonaProfile(profile);
+  }, []);
+  // An unsaved edit in Settings → Memory (MemorySettings.tsx) lives only on screen: leaving it asks first too.
+  const memoryDirty = useRef(false);
+  const [memoryUnsaved, setMemoryUnsaved] = useState(false);
+  // Bumped when the owner discards the edit, so Settings → Memory drops it even if what follows doesn't close it.
+  const [memoryDiscards, setMemoryDiscards] = useState(0);
+  const onMemoryDirty = useCallback((dirty: boolean) => {
+    memoryDirty.current = dirty;
+    setMemoryUnsaved(dirty);
+  }, []);
+  // An unsaved edit in Settings → Skills (SkillSettings.tsx) lives only on screen too, and is guarded the same way.
+  const skillDirty = useRef(false);
+  const [skillUnsaved, setSkillUnsaved] = useState(false);
+  const [skillDiscards, setSkillDiscards] = useState(0);
+  const onSkillDirty = useCallback((dirty: boolean) => {
+    skillDirty.current = dirty;
+    setSkillUnsaved(dirty);
+  }, []);
+  // Artifacts open to edit beside the chat (artifacts.ts, ADR 0029): their drafts live in memory for this sign-in, so
+  // moving around the app keeps them, and only signing out or closing the window would drop one.
+  const artifacts = useMemo(
+    () => new ArtifactStore((ref) => artifactIo({ host: ref.host, files: hermes.files, fs: hermes.artifactFs(ref.profile, ref.session) }), (o) => hermes.askForEdit(o)),
+    [hermes],
+  );
+  const artSnap = useSyncExternalStore(artifacts.subscribe, artifacts.getSnapshot);
+  const artifactUnsaved = [...artSnap.values()].some(isDirty);
+  const [leaving, setLeaving] = useState<{ edit: "persona" | "memory" | "skill" | "artifact"; what: LeaveWhat; go: () => void; stay?: () => void }>();
+  /** Runs `go` now, or once the owner agrees to leave an unsaved persona, memory, skill or artifact edit behind. `stay` runs if they don't. */
+  const guard = (go: () => void, what: LeaveWhat = "leave", stay?: () => void) => {
+    // Signing out or closing drops artifact edits too: once a settings edit is left, they are asked about in turn.
+    const next = what === "signout" || what === "close" ? () => (artifacts.unsaved().length ? setLeaving({ edit: "artifact", what, go, stay }) : go()) : go;
+    if (memoryDirty.current) return setLeaving({ edit: "memory", what, go: next, stay });
+    if (skillDirty.current) return setLeaving({ edit: "skill", what, go: next, stay });
+    if (personaDirty.current) return setLeaving({ edit: "persona", what, go: next, stay });
+    next();
+  };
+  const guardRef = useRef(guard);
+  guardRef.current = guard;
+  // Closing the window asks too, only while there is something to lose. A memory edit also holds a page reload.
+  useCloseGuard(memoryUnsaved || skillUnsaved || artifactUnsaved, (close) => guardRef.current(close, "close"));
+  const guardCloseRef = useRef(guardClose);
+  useEffect(() => {
+    if (!personaUnsaved) return;
+    let stop: (() => void) | undefined;
+    let gone = false;
+    guardCloseRef.current((close) => guardRef.current(close, "close")).then(
+      (off) => (gone ? off() : (stop = off)),
+      () => {},
+    );
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, [personaUnsaved]);
+  // A new object each time a row asks Settings to show the Text generation model; the rail's button opens it plainly.
+  const [showTextGeneration, setShowTextGeneration] = useState<object>();
+  /** Set to open Settings on its Memory tab, from the context inspector. */
+  const [showMemory, setShowMemory] = useState<object>();
+  /** Set, each time anew, to open Settings → Diagnostics, at the capability a screen's note named. */
+  const [showDiagnostics, setShowDiagnostics] = useState<{ id?: CapabilityId }>();
+  const [showProfile, setShowProfile] = useState<{ name: string; tab: "profiles" | "persona" }>();
+  /** What the connected Hermes supports, for the menus that say what it lacks (capabilities.ts). */
+  const caps = useCapabilities(hermes.capabilities);
+  const workLacking = (Object.keys(WORK_PARTS) as WorkFeature[]).filter((part) => caps.caps[WORK_PARTS[part]].state === "unsupported").join(" ");
+  const workLacks = useMemo(() => new Set(workLacking.split(" ").filter(Boolean) as WorkFeature[]), [workLacking]);
+  /** Set, each time anew, to open Settings on its Voice tab, from a voice conversation's "Change voice settings". */
+  const [showVoice, setShowVoice] = useState<object>();
+  /** Set, each time anew, to open Settings → Snapshots, from Share snapshot when no host is set up. */
+  const [showSnapshots, setShowSnapshots] = useState<object>();
+  const openVoiceSettings = useRef(() => {});
+  const voice = useMemo<VoiceApi>(
+    () => ({
+      // Speech to text may run on this computer, first or as backup (ADR 0065, 0067); Rust decides where a recording
+      // goes, and its answer says where it ran. The route read here also tells the composer whether Hermes is needed.
+      setup: () =>
+        Promise.all([hermes.voiceSetup(), localStt.state().catch(() => undefined)]).then(([setup, local]) => {
+          return local?.onThisComputer
+            ? { ...setup, sttLocal: { label: local.label ?? undefined, problem: local.problem ?? undefined, backup: !!local.backup } }
+            : setup;
+        }),
+      transcribe: (audio, mime, signal) => localStt.transcribe({ audio, mime, profile: hermes.profile, connection: hermes.connectionId, signal }),
+      speak: (text) => hermes.speak(text),
+      onChange: (fn) => {
+        const offHermes = hermes.onVoiceChange(fn);
+        const offLocal = localStt.onChange(fn);
+        return () => (offHermes(), offLocal());
+      },
+      openSettings: () => openVoiceSettings.current(),
+    }),
+    [hermes, localStt],
+  );
+  // The speech-to-text route as Rust reads it, also while Hermes is offline: Dictation can run on this computer then.
+  useEffect(() => {
+    const read = () => void sttRoute.refresh(() => localStt.state().then(prefsOf, () => DEFAULT_STT_PREFS));
+    read();
+    return localStt.onChange(read);
+  }, [localStt]);
+  // The project screen covers the chat pane, as Settings does.
+  const [projectOpen, setProjectOpen] = useState(false);
+  // The membership sync's dialog: the move to Hermes, and conflicts with another computer (ADR 0109).
+  const [membershipOpen, setMembershipOpen] = useState(false);
+  /** The Scheduled jobs screen covers the chat, as Settings does. */
+  const [jobsOpen, setJobsOpen] = useState(false);
+  /** The job the Scheduled jobs screen opens on, when something other than the rail opened it; `n` starts it again. */
+  const [jobsAt, setJobsAt] = useState<{ id: string; n: number }>();
+  /** Automations (webhook routes, ADR 0108) cover the chat too. */
+  const [automationsOpen, setAutomationsOpen] = useState(false);
+  // The side panel's Terminal (ADR 0022, ADR 0039): which shell is shown, kept in the prefs so it opens on the one picked
+  // last (the Hermes server's until then, ADR 0051), the folder shells a reply's paths opened (ADR 0167), and which are
+  // running, for the rail's dot.
+  const terminalShells = useShells();
+  // The list holds the profile's archived chats only while its Archived section is shown (ADR 0063); a profile switch
+  // starts without them, so they are listed again then.
+  const archivedShown = useSyncExternalStore(subscribeUIPrefs, getUIPrefs).chatSectionsShown.includes("archived");
+  useEffect(() => {
+    if (archivedShown !== archivedListed) void hermes.listArchived(archivedShown);
+  }, [hermes, archivedShown, archivedListed]);
+  const [termRunning, setTermRunning] = useState<Record<TerminalKind, boolean>>({ server: false, local: false });
+  const terminalRunning = termRunning.server || termRunning.local;
+  // The owner holds Hermes's screen: its computer use waits until they hand back, so the Screen tab says so.
+  const [screenHeld, setScreenHeld] = useState(false);
+  // The Repository screen covers the chat panes too (ADR 0110).
+  const [repoOpen, setRepoOpen] = useState(false);
+  /** Where the Repository screen opens when a chat's worktree label opened it: that worktree's Worktrees view. */
+  const [repoAt, setRepoAt] = useState<{ target: string; path: string; view: "worktrees"; n: number }>();
+  // The side panel's Files: the folder open last stays for this sign-in.
+  const [filesPath, setFilesPath] = useState<string>();
+  // Usage analytics covers the chat panes too (ADR 0026). It reads Hermes afresh each time it opens.
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [usageTab, setUsageTab] = useState<UsageTab>("spending");
+  const budgets = useSyncExternalStore(budgetWatches.subscribe, () => budgetWatches.of(connection.id));
+  // A budget notification's click opens Usage → Budgets here, as the rail's Usage would.
+  useEffect(() => {
+    if (!connection.id) return;
+    const id = connection.id;
+    return budgetOpener.showing(id, () =>
+      guardRef.current(() => {
+        setProjectOpen(false);
+        setSettingsOpen(false);
+        setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+        setRepoOpen(false);
+        setWorkOpen(false);
+        setUsageTab("budgets");
+        setUsageOpen(true);
+      }),
+    );
+  }, [connection.id]);
+  // The Work page, the kanban board of bot work (Work.tsx, ADR 0171), covers the chat panes too.
+  const [workOpen, setWorkOpen] = useState(false);
+  const usageIo = useMemo(() => hermes.usageIo(), [hermes]);
+  // The Preview's server side is the open connection's, which Rust finds by the name it was opened under (ADR 0125).
+  const previewWeb = useMemo<WebPages>(() => ({ ...webPages, devServers: () => webPages.devServers(hermes.connectionId) }), [webPages, hermes]);
+  const previewServerPages = useMemo<ServerPages>(
+    () => ({ open: (url, onClosed) => serverPages.open(url, onClosed, hermes.connectionId) }),
+    [serverPages, hermes],
+  );
+  // Settings → Diagnostics → Logs reads the profile's Hermes logs (ADR 0033, 0087). What it read goes when it closes;
+  // this app's own diagnostics stay.
+  const logs = useMemo(
+    () => ({
+      connection: route?.kind === "ssh" ? "SSH tunnel" : "dashboard URL",
+      read: (file: RemoteLog, lines: number) => hermes.readLog(profile, file, lines),
+      save: (text: string, fileName: string) => invoke<string | null>("logs_export", { text, fileName }),
+      attempts: connectionAttempts,
+    }),
+    [route?.kind, hermes, profile],
+  );
+  const listProfiles = useCallback(() => hermes.profiles(), [hermes]);
+  const update = useSyncExternalStore(updates.subscribe, updates.getSnapshot);
+  const updateWaiting = needsAttention(update);
+  // Drafts were saved for the restart; nothing typed after that would survive it.
+  const restarting = update.state === "restarting";
+  // The chat to reopen at launch, until Hermes's list shows it is there or gone, or the owner goes somewhere first.
+  // Kept per connection and profile, so the same profile name on another server keeps its own (connections.ts).
+  const pref = prefScope(connection, profile);
+  const [reopening, setReopening] = useState(() =>
+    reopenLast === "switch" && shown?.has(pref) ? (shown.get(pref) ?? undefined) : reopenLast ? chatToReopen(pref, reopenLast) : undefined,
+  );
+  // Showing nothing reopened is showing the New chat pane: a later screen in this run shows that again (ADR 0162).
+  useEffect(() => {
+    if (!reopening) shown?.set(pref, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the screen first shows
+  }, []);
+  // One pane, or two side by side. The chat to reopen opens at once when the list saved on this computer has it, so the
+  // New chat pane doesn't show first.
+  const [panes, setPanes] = useState<Pane[]>(() => {
+    const chatId = reopening && chats.some((c) => c.id === reopening) ? reopening : null;
+    return [{ key: newPaneKey(), view: newView(), chatId, tabs: [chatId] }];
+  });
+  // Side by side ("row") or one above the other ("column"), when there are two panes.
+  const [splitDir, setSplitDir] = useState<SplitDir>("row");
+  // The pane the chat list, Search, New chat and the keyboard shortcuts act on.
+  const [activeKey, setActiveKey] = useState(() => panes[0].key);
+  const activeKeyRef = useRef(activeKey);
+  activeKeyRef.current = activeKey;
+  const firstPane = useRef(panes[0].key);
+  const panesRef = useRef(panes);
+  panesRef.current = panes;
+  const active = panes.find((p) => p.key === activeKey) ?? panes[0];
+  const other = panes.find((p) => p !== active);
+  const split = panes.length > 1;
+  // Compare lasts while both its panes show the chats it has for them: going elsewhere in either, closing one, a
+  // deleted chat or another profile ends it.
+  const [compare, setCompare] = useState<Compare>();
+  const comparing = compare?.every((side) => panes.some((p) => p.key === side.pane && p.chatId === side.chatId)) ? compare : undefined;
+  useEffect(() => {
+    if (compare && !comparing) setCompare(undefined);
+  }, [compare, comparing]);
+  /** Each pane's latest `deliver`, so a compared pane can send in its partner's chat as that pane would. */
+  const delivers = useRef(new Map<string, RefObject<Deliver>>()).current;
+  // Compared sends still starting their chats or reaching Hermes. A chat being started has no id yet, so nothing else
+  // shows that its side is busy.
+  const [compareSends, setCompareSends] = useState(0);
+  const trackCompareSend = <T,>(sending: Promise<T>) => {
+    setCompareSends((n) => n + 1);
+    return sending.finally(() => setCompareSends((n) => n - 1));
+  };
+  const [listOpen, setListOpen] = useState(true);
+  const [toast, setToast] = useState<Toast | null>(notSaved ? { text: notSaved, at: Date.now() } : null);
+  // This app's diagnostics for the Logs screen (ADR 0033): the connection's changes, and the failures the app showed.
+  useEffect(() => {
+    note(status === "connected" ? "INFO" : "WARNING", `Connection to ${routeLabel(route) ?? "Hermes"}, profile ${profile}: ${STATUS_LABEL[status]}${status !== "connected" && closedReason ? ` (${closedReason})` : ""}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- log a line when the status, its reason or the profile changes; adding `route` would also log one each time the route alone changes
+  }, [status, closedReason, profile]);
+  useEffect(() => {
+    if (syncError) note("WARNING", `Chat list: ${syncError}`);
+  }, [syncError]);
+  useEffect(() => {
+    if (toast) note("WARNING", `Shown: ${toast.text}`);
+  }, [toast]);
+  // What became of a branch whose answer was lost, once the chat list settled it (ADR 0027).
+  useEffect(() => {
+    if (branchNews) setToast({ text: branchNews.text, at: branchNews.at });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the news's stamp, so a re-delivered copy of the same news doesn't toast twice
+  }, [branchNews?.at]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  // The Saved filter the search palette opened with, if any; and the tag editor.
+  const [searchStart, setSearchStart] = useState<SavedFilter>();
+  const [tagsOpen, setTagsOpen] = useState(false);
+  /** Where focus goes when the tag editor closes: the chat row whose menu opened it. */
+  const tagsReturn = useRef<HTMLElement | null>(null);
+  const openTags = (returnTo: HTMLElement | null = null) => {
+    tagsReturn.current = returnTo;
+    setTagsOpen(true);
+  };
+
+  // The inbox: what needs the owner, or finished, across the profiles (hermes/inbox.ts). Dismissals are kept on this
+  // computer for the connection, and change nothing else. `goTo`: an entry's chat to open once its profile's list
+  // has it. `focusItem`: the card or message in a pane to show once it is on screen.
+  const [inboxOpen, setInboxOpen] = useState(false);
+  /**
+   * The Bots view (Bots.tsx, ADR 0066), and a bot's chat to open once its profile is shown: `stay`, asked for in bot
+   * mode, which holds it until the Bot Chat opens; `opening`, looked up and on its way.
+   */
+  const [botsOpen, setBotsOpen] = useState(false);
+  const [botGo, setBotGo] = useState<{ bot: Bot; then: "open" | "new"; nav: number; stay: boolean; opening?: boolean }>();
+  /** The agent office (Office.tsx, ADR 0077), unless Settings turns it off. */
+  const [officeOpen, setOfficeOpen] = useState(false);
+  const ackScope = inboxScope(connection);
+  const acks = useMemo(() => inboxAcks(localStorage, ackScope), [ackScope]);
+  const dismissed = useSyncExternalStore(acks.subscribe, acks.getSnapshot);
+  const [seen] = useState(() => new Map<string, number>());
+  const [goTo, setGoTo] = useState<{ entry: InboxEntry; approval: boolean }>();
+  const [focusItem, setFocusItem] = useState<{ pane: string; chatId: string; itemId?: string; approval: boolean }>();
+
+  // The model pick is sticky: new chats start on it, in this profile, until the owner picks another. It is kept on this
+  // computer only and never becomes the profile's default. Picked in another profile, it gives way to this profile's
+  // own model. A chat on screen shows the model it runs on, and a pick there switches that chat alone.
+  const { modelPicker, modelPicks, modelFavorites, previewWidth, screenshotShortcut, agentOffice, inboxAutoDismissDays, summonSelection } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
+  const keys = useBindings();
+  const officeShown = officeOpen && agentOffice !== "off";
+  // Who sits where in the building. It outlives the building's view, so hidden to the tray, minimized, behind Settings
+  // or switched to List and back, each agent comes back to the desk it had.
+  const officeFloorMemory = useRef(EMPTY_OFFICE_MEMORY);
+  const catalog = models?.profile === profile ? models : undefined;
+  const sticky: ModelPick | undefined = modelPicks[pref] ?? (modelPicker?.profile === pref ? withoutProfile(modelPicker) : catalog?.defaultPick);
+
+  // The side panel beside the chat (ADR 0039): its tab (null: the launcher, ADR 0159), and whether it is open. Once opened it stays mounted for this
+  // sign-in, hidden while closed, so a shell or the screen in it keeps running. `panelHidden`: in a window too narrow
+  // for both, the panel covers the chat, and the owner has gone back to the chat without closing it.
+  const [panelTab, setPanelTab] = useState<PanelTab | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelMounted, setPanelMounted] = useState(false);
+  const [panelHidden, setPanelHidden] = useState(false);
+  const [previewHistory, stepPreview] = useReducer(stepHistory, null);
+  // The width while the owner drags the panel's edge; it is kept in the display preferences once they let go.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const openPanel = useCallback((tab: PanelTab | null) => {
+    setPanelTab(tab);
+    setPanelOpen(true);
+    setPanelMounted(true);
+    setPanelHidden(false);
+  }, []);
+  const openPreview = useCallback(
+    (target: PreviewTarget) => {
+      stepPreview({ kind: "open", target });
+      openPanel("preview");
+    },
+    [openPanel],
+  );
+  // A path in a reply (ADR 0167): a file opens in the Preview, a folder in a folder shell on the Hermes server. One
+  // opener for every pane, so the newest click wins whichever pane it was in.
+  const openShellIn = terminalShells.openIn;
+  const openPath = useMemo(
+    () =>
+      pathOpener({
+        kindOf: (path) => hermes.pathKind(path),
+        preview: openPreview,
+        shell: (folder) => {
+          if (openShellIn("server", folder)) openPanel("terminal");
+          else setToast({ text: `The Terminal holds ${MAX_FOLDER_SHELLS} folder shells. Close one to open another.`, at: Date.now() });
+        },
+        say: (text) => setToast({ text, at: Date.now() }),
+      }),
+    [hermes, openPreview, openPanel, openShellIn],
+  );
+  const mainRef = useRef<HTMLElement>(null);
+  const mainWidth = useWidth(mainRef);
+
+  // Projects are Hermes's, one store for each connection and profile; which chats are in each is kept on this computer.
+  // A project picked in the switcher narrows the list to its chats. Active, Settled and Unread work as before inside it.
+  const scope = projectScope(connection, profile);
+  // Troubleshooting chats started from the Jobs screen, for this app run (troubleshoot.ts, ADR 0053). The store sees
+  // every change in the chats, to tell when a troubleshooting reply has ended.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one store per Hermes connection: keyed on `hermes`, which the factory does not read
+  const troubleshoots = useMemo(() => new TroubleshootStore(), [hermes]);
+  useEffect(() => hermes.subscribe(() => troubleshoots.observe(hermes.getSnapshot())), [hermes, troubleshoots]);
+  // Idle compaction (idleCompact.ts, ADR 0119): a chat open on Hermes here that has sat idle with its context window
+  // past the owner's mark is compacted, one at a time. It sees every change in the chats, to time how long each has
+  // been idle, and looks for one that is due every IDLE_COMPACT_CHECK_MS. Off unless turned on in Settings → Model.
+  const compactor = useMemo(
+    () =>
+      new IdleCompactor(hermes, () => getUIPrefs().idleCompact, (c) => {
+        const text = idleCompactionNote(c);
+        if (text) setToast({ text, at: Date.now() });
+      }),
+    [hermes],
+  );
+  useEffect(() => {
+    const look = () => {
+      const snap = hermes.getSnapshot();
+      void compactor.check(snap.chats, snap.status, Date.now());
+    };
+    const unsubscribe = hermes.subscribe(() => compactor.observe(hermes.getSnapshot().chats, Date.now()));
+    compactor.observe(hermes.getSnapshot().chats, Date.now());
+    const timer = setInterval(look, IDLE_COMPACT_CHECK_MS);
+    return () => {
+      unsubscribe();
+      clearInterval(timer);
+    };
+  }, [hermes, compactor]);
+  // Keep the same store and request queue when returning to a profile: a write still finishing for that profile
+  // must share ordering with its new reads and writes, rather than commit from an abandoned snapshot.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one map per Hermes connection: keyed on `hermes`, which the factory does not read
+  const projectStores = useMemo(() => new Map<string, ProjectsStore>(), [hermes]);
+  const projects = useMemo(() => {
+    let store = projectStores.get(scope);
+    if (!store) {
+      store = new ProjectsStore(hermes.projects, savedProjects, scope, profile);
+      projectStores.set(scope, store);
+    }
+    return store;
+  }, [hermes, scope, profile, projectStores]);
+  const proj = useSyncExternalStore(projects.subscribe, projects.getSnapshot);
+  const newChatDraftKey = draftKey(connection, profile, null);
+  const newChatDraft = useSyncExternalStore(savedDrafts.subscribe, () => savedDrafts.get(newChatDraftKey));
+  const [startWith, setStartWith] = useState<{ pane: string; n: number }>();
+  const contexts = useMemo(
+    () => chatContext(hermes.contextFiles, savedContextLedger, projects, (id) => knownWindow(hermes.getSnapshot().chats, projects.getSnapshot().defaults[id]?.model)),
+    [hermes, projects],
+  );
+  useEffect(() => {
+    hermes.sendContext = (inProfile, chatId) => (inProfile === projects.profile ? contexts.next(chatId) : undefined);
+    return () => void (hermes.sendContext = undefined);
+  }, [hermes, projects, contexts]);
+  // Another Hermes Chat window changed the projects, or another window or instance their defaults: show them here too.
+  // Defaults are in a file every instance shares, so they are read again whenever the window comes back to the front.
+  useEffect(() => {
+    const changed = (e: StorageEvent) => e.key === PROJECTS_KEY && projects.reread();
+    const back = () => void projects.readDefaults();
+    window.addEventListener("storage", changed);
+    window.addEventListener("focus", back);
+    return () => {
+      window.removeEventListener("storage", changed);
+      window.removeEventListener("focus", back);
+    };
+  }, [projects]);
+  // Tags and Saved filters: kept on this computer for each connection and profile, never sent to Hermes (tags.ts,
+  // ADR 0106). Another Hermes Chat's changes show once this window is back in front.
+  const tagsStore = useMemo(() => new TagsStore(savedTagsFile, scope), [scope]);
+  const tagSnap = useSyncExternalStore(tagsStore.subscribe, tagsStore.getSnapshot);
+  useEffect(() => {
+    const back = () => void tagsStore.reread();
+    window.addEventListener("focus", back);
+    return () => window.removeEventListener("focus", back);
+  }, [tagsStore]);
+  // Snoozes: kept on this computer for each connection and profile, never sent to Hermes (snooze.ts, ADR 0036).
+  const snoozeStore = useMemo(() => new SnoozeStore(localStorage, scope), [scope]);
+  const snoozes = useSyncExternalStore(snoozeStore.subscribe, snoozeStore.getSnapshot);
+  // Renders again when the next snooze wakes, so a chat's header stops saying Snoozed then.
+  const snoozeNow = useSnoozeClock(snoozes);
+  const snoozedNow = (chatId: string) => ((snoozes[chatId] ?? 0) > snoozeNow ? snoozes[chatId] : undefined);
+  useEffect(() => {
+    const changed = (e: StorageEvent) => e.key === SNOOZE_KEY && snoozeStore.reread();
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [snoozeStore]);
+  // Sending a message from this app wakes a snoozed chat, as it makes a Settled one active again (ADR 0002).
+  useEffect(
+    () => hermes.onSend((sentIn, chatId) => sentIn === profile && snoozeStore.isSnoozed(chatId) && snoozeStore.wake(chatId)),
+    [hermes, profile, snoozeStore],
+  );
+  // When each chat last stopped working, so the list puts it at the top then (snooze.ts). Noted on every change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one clock per connection and profile: keyed on `scope`, which the factory does not read
+  const attention = useMemo(() => new AttentionClock(), [scope]);
+  // Pinned chats: kept on this computer for each connection and profile, like snoozes (ADR 0085).
+  const pinStore = useMemo(() => new PinStore(localStorage, scope), [scope]);
+  const pins = useSyncExternalStore(pinStore.subscribe, pinStore.getSnapshot);
+  useEffect(() => {
+    const changed = (e: StorageEvent) => e.key === PINS_KEY && pinStore.reread();
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [pinStore]);
+  const stopStore = useMemo(() => new StopWaitingStore(localStorage, scope), [scope]);
+  const stops = useSyncExternalStore(stopStore.subscribe, stopStore.getSnapshot);
+  useEffect(() => {
+    const changed = (e: StorageEvent) => e.key === STOP_WAITING_KEY && stopStore.reread();
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [stopStore]);
+  const handoffMap = useHandoffs(chats, stops);
+  const stopWaiting = (id: string) => {
+    const chat = chats.find((c) => c.id === id);
+    if (chat) stopStore.stop(id, outstandingIds(chat));
+  };
+  // A pinned chat the list doesn't reach (quiet for over a month) is looked up once and kept in the list; one Hermes no
+  // longer has is unpinned.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one set per connection and profile: keyed on `scope`, which the factory does not read
+  const pinsLookedUp = useMemo(() => new Set<string>(), [scope]);
+  useEffect(() => {
+    if (status !== "connected" || switching || !hermes.hasListed()) return;
+    for (const id of Object.keys(pins)) {
+      if (pinsLookedUp.has(id) || chats.some((c) => c.id === id)) continue;
+      pinsLookedUp.add(id);
+      hermes.findChat(id, profile).then(
+        (found) => (found ? hermes.profile === profile && hermes.reveal(found) : pinStore.unpin(id)),
+        () => pinsLookedUp.delete(id),
+      );
+    }
+  }, [pins, chats, status, switching, pinStore, hermes, profile, pinsLookedUp]);
+  attention.observe(chats, Date.now(), status === "connected", handoffMap);
+  const tagChange = (fn: () => Promise<unknown>) =>
+    fn().catch((e) => setToast({ text: (e as Error).message, at: Date.now() }));
+  const openSearch = (start?: SavedFilter) => {
+    setSearchStart(start);
+    setSearchOpen(true);
+  };
+  const openSettings = () => {
+    setProjectOpen(false);
+    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+    setRepoOpen(false);
+    setUsageOpen(false); setWorkOpen(false);
+    setShowTextGeneration(undefined);
+    setShowMemory(undefined);
+    setShowDiagnostics(undefined);
+    setShowVoice(undefined);
+    setShowSnapshots(undefined);
+    setShowProfile(undefined);
+    setSettingsOpen(true);
+  };
+  openVoiceSettings.current = () => {
+    openSettings();
+    setShowVoice({});
+  };
+  const openSnapshotSettings = () => {
+    openSettings();
+    setShowSnapshots({});
+  };
+  /** Opens Settings → Diagnostics at capability `id`, from the note a screen shows when Hermes lacks it. */
+  const openDiagnostics = (id: CapabilityId) => {
+    openSettings();
+    setShowDiagnostics({ id });
+  };
+  /** Opens Settings → Profiles on profile `name`, or Settings → Persona on it, from a bot's menu in the Bots view. */
+  const openProfileSettings = (name: string, tab: "profiles" | "persona") => {
+    setBotsOpen(false);
+    openSettings();
+    setShowProfile({ name, tab });
+  };
+  /** Opens a page of the compatibility guide in the owner's browser. */
+  const openGuide = (url: string) =>
+    void webPages.openInBrowser(url).catch((e: unknown) => setToast({ text: `Couldn't open the compatibility guide: ${errorText(e)}`, at: Date.now() }));
+  const listable = proj.projects.filter((p) => !p.archived);
+  const shownProject = listable.find((p) => p.id === proj.selectedId);
+  const projectScreenOpen = projectOpen && !!shownProject;
+  const inShown = shownProject && new Set(proj.chats[shownProject.id] ?? []);
+  const inList = chats.filter((c) => policyOf(c).listed);
+  const listed = inShown ? inList.filter((c) => inShown.has(c.id)) : inList;
+  const unreadChats = inList.filter((c) => c.unread && !c.archived);
+  const projectUnread: ProjectUnread = {
+    all: unreadChats.length,
+    hidden: inShown ? unreadChats.filter((c) => !inShown.has(c.id)).length : 0,
+    of: (id) => unreadChats.filter((c) => proj.chats[id]?.includes(c.id)).length,
+  };
+  const projectNames = (chatId: string) => listable.filter((p) => proj.chats[p.id]?.includes(chatId)).map((p) => p.name);
+  useWindowTitle(windowTitle(active.chatId ? chats.find((c) => c.id === active.chatId)?.title : undefined, unreadChats.length));
+
+  const listedFromHermes = hermes.hasListed();
+  // Clears from the Inbox were kept on this computer until clearing a chat settled it (ADR 0090). Once Hermes has
+  // listed the profile's chats, the clears that still hold, the chats the old Unsettled section showed, are settled
+  // once, as the Settle button would, and every clear of the connection and profile is dropped.
+  const clearedStore = useMemo(() => new ClearedStore(localStorage, scope), [scope]);
+  const cleared = useSyncExternalStore(clearedStore.subscribe, clearedStore.getSnapshot);
+  useEffect(() => {
+    if (!listedFromHermes || status !== "connected" || !Object.keys(cleared).length) return;
+    for (const id of heldClears(chats, snoozes, Date.now(), attention.since, cleared, pins)) void hermes.settle(id);
+    clearedStore.dropAll();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- settle once, when Hermes has listed and clears are held; adding `chats`, `snoozes` or `pins` would run it again on each change to them
+  }, [listedFromHermes, status, cleared, clearedStore]);
+  const where = routeLabel(route) ?? addressLabel(connection);
+  const inbox = inboxEntries({ profile, chats, connected: status === "connected", others, live, seen, handoffs: handoffMap });
+  const inboxShown = inbox.entries.filter((e) => !acks.isDismissed(e, dismissed));
+  // Writes only when a resumed chat shows cards a dismissed waiting session covered.
+  useEffect(() => acks.keepCovered(inbox.entries));
+  useEffect(() => {
+    if (inboxAutoDismissDays !== null) acks.expire(inbox.entries, inboxAutoDismissDays * 86_400_000);
+  });
+  // Background connections' entries (ADR 0125), each carrying its server; the rail and the tray count every live one.
+  const background = servers.filter((s) => !s.target);
+  const elsewhere = background.flatMap((s) => s.entries);
+  const inboxCount = inboxShown.filter(needsOwner).length + background.reduce((n, s) => n + attentionOf(s), 0);
+  // A restore reloads the app on what it wrote, so it waits for replies and Approvals, here or in another profile, and
+  // for any draft or queue this computer couldn't keep (ADR 0038).
+  const workingRef = useRef(false);
+  const working =
+    chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some(blocksRestore) || background.some((s) => s.busy);
+  workingRef.current = working;
+  // Read when the restore dialog renders and again just before it writes: sends and refused writes aren't React state.
+  const restoreBusy = () => restoreBlocked({ working: workingRef.current, unsaved: unsaved.size, sending: sending.size });
+  // Settings → Persona edits the SOUL.md of any profile on this connection, starting on the one in use; its edits are
+  // kept apart per connection and profile.
+  const persona: PersonaWiring = {
+    api: hermes.persona,
+    store: personaStore,
+    keyOf: (p) => personaKey(connection, p),
+    where: { server: route ? serverLabel(route) : connection.mode === "ssh" ? connection.sshTarget : serverLabel({ kind: "url", url: connection.url, addresses: [] }), route: where, profile },
+  };
+
+  const stillIn = (p: string) => hermes.profile === p;
+
+  // A pane moving to another chat keeps its tabs in step (Tabs.tsx `navigateTabs`).
+  const patchPane = (key: string, patch: Partial<Pane>) =>
+    setPanes((ps) =>
+      ps.map((p) => (p.key !== key ? p : { ...p, ...patch, view: newView(), ...(patch.chatId !== undefined && { tabs: navigateTabs(p.tabs, p.chatId, patch.chatId) }) })),
+    );
+
+  // The active pane's chat is the one kept as the profile's last open chat, so it reopens at the next launch.
+  // Counts every move between chats, panes and profiles. A chat link that waited on Hermes checks it afterwards, so a
+  // move made meanwhile, even one that came back to the same chat, wins over the link (ADR 0037).
+  const navGen = useRef(0);
+
+  const activate = (key: string) => {
+    if (key === activeKeyRef.current) return;
+    const pane = panes.find((p) => p.key === key);
+    if (!pane) return;
+    navGen.current++;
+    activeKeyRef.current = key;
+    setActiveKey(key);
+    rememberChat(pane.chatId);
+  };
+
+  // Every move between chats is kept as the profile's last open chat, so it reopens at the next launch whether or not
+  // the app closes cleanly. Going somewhere also ends the wait to reopen the last one. A chat opens in the active pane
+  // unless another is named, and the pane it opens in becomes the active one.
+  // `keepSettings`: the move isn't the owner's, so Settings stays on screen. `newTab`: the chat opens in a tab of its
+  // own, rather than in place of the one showing.
+  // A Bot Chat is reopened from its bot's row, found by its title, never by a stored id (ADR 0066): opening one leaves
+  // the chat to reopen at the next launch as it was.
+  const rememberChat = (id: string | null) => {
+    const chat = id === null ? undefined : hermes.getSnapshot().chats.find((c) => c.id === id);
+    if (chat && !policyOf(chat).listed) return;
+    rememberOpenChat(pref, id);
+    shown?.set(pref, id);
+  };
+  const openChat = (
+    id: string | null,
+    {
+      pane = active.key,
+      remember = true,
+      fresh = false,
+      keepSettings = false,
+      newTab = false,
+      worktree,
+      subagent,
+      picked,
+    }: { pane?: string; remember?: boolean; fresh?: boolean; keepSettings?: boolean; newTab?: boolean; worktree?: WorktreeStart; subagent?: SubagentId; picked?: Found } = {},
+  ) => {
+    const go = () => {
+      navGen.current++;
+      setPanelHidden(true);
+      if (newTab) setPanes((ps) => ps.map((p) => (p.key === pane && !p.tabs.includes(id) ? { ...p, tabs: [...p.tabs, id] } : p)));
+      patchPane(pane, { chatId: id, picked: picked && { found: picked, at: Date.now() }, jump: undefined, subagent: subagent && id ? { chatId: id, id: subagent, at: Date.now() } : undefined, worktree, ...(fresh && { draftError: undefined }) });
+      activeKeyRef.current = pane;
+      setActiveKey(pane);
+      setReopening(undefined);
+      if (!keepSettings) setSettingsOpen(false);
+      setProjectOpen(false);
+      setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+      setRepoOpen(false);
+      setUsageOpen(false); setWorkOpen(false);
+      if (remember) rememberChat(id);
+    };
+    if (keepSettings) go();
+    else guard(go);
+  };
+
+  const newChat = (remember = true) => openChat(null, { remember, fresh: true });
+
+  /** Opens the Scheduled jobs screen on one job, as a troubleshooting chat's toast does (ADR 0053). */
+  const openJobAt = (id: string) =>
+    guard(() => {
+      setProjectOpen(false);
+      setSettingsOpen(false);
+      setUsageOpen(false); setWorkOpen(false);
+      setRepoOpen(false);
+      setAutomationsOpen(false);
+      setOfficeOpen(false);
+      setJobsAt((a) => ({ id, n: (a?.n ?? 0) + 1 }));
+      setJobsOpen(true);
+    });
+  const openJobAtLatest = useRef(openJobAt);
+  openJobAtLatest.current = openJobAt;
+  // A troubleshooting reply that ends while the Jobs screen isn't showing is said in a toast, which opens the job: the
+  // screen reads it again there and shows what changed. On the Jobs screen, the job's own panel says it.
+  const jobsShowing = useRef(false);
+  jobsShowing.current = jobsOpen && !settingsOpen;
+  const troubleToasted = useRef(new Set<string>());
+  useEffect(
+    () =>
+      troubleshoots.subscribe(() => {
+        for (const t of troubleshoots.getSnapshot()) {
+          if (t.phase !== "ended" || troubleToasted.current.has(t.id)) continue;
+          troubleToasted.current.add(t.id);
+          if (jobsShowing.current) continue;
+          const here = hermes.profile === t.profile;
+          setToast({
+            text: `Troubleshooting “${t.jobName}”: Hermes's reply has ended.${here ? "" : ` Switch to ${t.profile} to see the job.`}`,
+            at: Date.now(),
+            ...(here && { action: { label: "See what changed", run: () => openJobAtLatest.current(t.jobId) } }),
+          });
+        }
+      }),
+    [troubleshoots, hermes],
+  );
+
+  /** Opens the Repository screen on a worktree's Worktrees view, as a chat's worktree label does (ADR 0043). */
+  const openRepository = (at: { target: string; path: string; view: "worktrees" }) =>
+    guard(() => {
+      setProjectOpen(false);
+      setSettingsOpen(false);
+      setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+      setUsageOpen(false); setWorkOpen(false);
+      setRepoAt((was) => ({ ...at, n: (was?.n ?? 0) + 1 }));
+      setRepoOpen(true);
+    });
+
+  const pick = (found: Found) => guard(() => {
+    navGen.current++;
+    setPanelHidden(true);
+    hermes.reveal(found);
+    patchPane(active.key, { chatId: found.chatId, picked: { found, at: Date.now() }, jump: undefined, subagent: undefined });
+    setReopening(undefined);
+    rememberChat(found.chatId);
+    setSearchOpen(false);
+    setSettingsOpen(false);
+    setProjectOpen(false);
+    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+    setRepoOpen(false);
+    setUsageOpen(false); setWorkOpen(false);
+  });
+
+  // A second pane opens to the right and becomes the active one. Both panes may show the same chat: they are two views
+  // of it, with one transcript, one draft and one reply, each scrolled and searched on its own.
+  // `dir`: beside the first pane ("row") or below it ("column").
+  const splitWith = (chatId: string | null, dir: SplitDir = splitDir) => guard(() => {
+    if (split) return;
+    navGen.current++;
+    setPanelHidden(true);
+    setSplitDir(dir);
+    const key = newPaneKey();
+    setPanes((ps) => (ps.length > 1 ? ps : [...ps, { key, view: newView(), chatId, tabs: [chatId] }]));
+    activeKeyRef.current = key;
+    setActiveKey(key);
+    setReopening(undefined);
+    setSettingsOpen(false);
+    setProjectOpen(false);
+    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+    setRepoOpen(false);
+    setUsageOpen(false); setWorkOpen(false);
+    rememberChat(chatId);
+  });
+
+  // The other pane, or a new one, goes to the New chat pane on `model`; the pane Compare started from keeps its chat and
+  // stays the active one. A chat the other pane showed stays in the list.
+  const startCompare = (from: string, model: ModelPick) => guard(() => {
+    const origin = panes.find((p) => p.key === from);
+    if (!origin) return;
+    navGen.current++;
+    setPanelHidden(true);
+    const partner = panes.find((p) => p.key !== from)?.key ?? newPaneKey();
+    if (split) patchPane(partner, { chatId: null, picked: undefined, jump: undefined, subagent: undefined, worktree: undefined, draftError: undefined });
+    else setPanes((ps) => [...ps, { key: partner, view: newView(), chatId: null, tabs: [null] }]);
+    setCompare([{ pane: from, chatId: origin.chatId }, { pane: partner, chatId: null, model }]);
+    activeKeyRef.current = from;
+    setActiveKey(from);
+    setReopening(undefined);
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(from)}"] .composer textarea`)?.focus());
+  });
+
+  /** Opens a chat in the left (0) or right (1) pane, opening the right one if there's one pane. */
+  const openIn = (id: string, side: number) => {
+    const pane = panes[side];
+    if (pane) openChat(id, { pane: pane.key });
+    else splitWith(id);
+  };
+
+  // Screenshots go to the composer on screen, and each chat's staged attachments are kept here. The desk lives as long
+  // as this signed-in window: signing out deletes any capture not yet sent. Made in a layout effect, so StrictMode's
+  // second mount gets a desk of its own before the first paint. No chat is drawn without it, as its composer keeps its
+  // files there.
+  const [desk, setDesk] = useState<ScreenshotDesk>();
+  const screenshotsRef = useRef(screenshots);
+  useLayoutEffect(() => {
+    const d = new ScreenshotDesk(
+      screenshotsRef.current.api,
+      (remote) => remote && screenshotsRef.current.attached(),
+      () => revealComposerRef.current(),
+    );
+    setDesk(d);
+    return () => d.dispose();
+  }, []);
+  // The chats each unsent message references (ADR 0165), summarized by the connection on screen.
+  const hermesNow = useRef(hermes);
+  hermesNow.current = hermes;
+  const [referenceDesk] = useState(
+    () =>
+      new ReferenceDesk(
+        (chatId) => deadline(hermesNow.current.summarizeChat(chatId), ASK_DEADLINE_MS),
+        (e) => (e instanceof TitleModelUnavailable ? { why: e.message, fix: "text-model" } : { why: errorText(e) }),
+      ),
+  );
+  const openTextGeneration = () => {
+    setProjectOpen(false);
+    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+    setRepoOpen(false);
+    setUsageOpen(false); setWorkOpen(false);
+    // One destination at a time: an earlier Memory shortcut mustn't switch Settings away from this one.
+    setShowMemory(undefined);
+    setShowDiagnostics(undefined);
+    setShowTextGeneration({});
+    setSettingsOpen(true);
+  };
+  // Reveal the composer when Search, Settings, Projects, Server files or a narrow preview covers it, so the capture can
+  // be reviewed.
+  const takeScreenshot = (remote = false) => guard(() => {
+    if (!desk) return;
+    flushSync(() => {
+      setSettingsOpen(false);
+      setProjectOpen(false);
+      setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+      setRepoOpen(false);
+      setUsageOpen(false); setWorkOpen(false);
+      setSearchOpen(false);
+      if (!previewFits) setPanelHidden(true);
+    });
+    focusPane(active.key);
+    void desk.capture({ remote });
+  });
+  // An annotation added while the Preview covers the chat (a narrow window) goes to the chat's composer, which shows.
+  const revealComposerRef = useRef(() => {});
+  revealComposerRef.current = () => {
+    if (!previewFits) setPanelHidden(true);
+    focusPane(active.key);
+  };
+  const takeScreenshotRef = useRef(takeScreenshot);
+  takeScreenshotRef.current = takeScreenshot;
+  useEffect(() => (desk ? screenshotsRef.current.onDesktopShortcut(() => takeScreenshotRef.current(true)) : undefined), [desk]);
+
+  // The pane left takes the whole width and becomes the active one.
+  const closePane = (key: string) => {
+    const rest = panes.filter((p) => p.key !== key);
+    if (!rest.length || rest.length === panes.length) return;
+    navGen.current++;
+    setPanes(rest);
+    activeKeyRef.current = rest[0].key;
+    setActiveKey(rest[0].key);
+    rememberChat(rest[0].chatId);
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(rest[0].key)}"] .composer textarea`)?.focus());
+  };
+
+  // A tab closing shows the one beside it. The last tab of a second pane closes the pane; the last of one pane leaves a
+  // New chat tab.
+  const closeTab = (key: string, id: string | null) => {
+    const pane = panes.find((p) => p.key === key);
+    if (!pane) return;
+    const { rest, next } = closeTabIn(pane.tabs, id);
+    if (!rest.length && split) return closePane(key);
+    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, tabs: rest } : p)));
+    if (pane.chatId === id) openChat(next ?? null, { pane: key, fresh: next === undefined });
+  };
+
+  /** Ctrl+Tab and Ctrl+Shift+Tab: the next or previous tab in the active pane. */
+  const cycleTab = (step: number) => {
+    const n = active.tabs.length;
+    if (n < 2) return;
+    openChat(active.tabs[(active.tabs.indexOf(active.chatId) + step + n) % n]);
+  };
+
+  // A chat dragged onto a pane, or moved by a tab's menu or the keyboard: `tabMoves.ts` says where it lands. A tab moves
+  // and a chat from the list opens. A pane whose chat changes shows it afresh, as a chat opened there would.
+  const layoutAfter = (moved: MovedChat, drop: TabDrop, newPane: (chatId: string) => Pane = (chatId) => ({ key: "pane-new", view: 0, chatId, tabs: [chatId] })) =>
+    moveTab(panesRef.current, splitDir, moved, drop, newPane);
+  /** What the hint says a drop would do, or null when it would do nothing. */
+  const previewMove = (moved: MovedChat, drop: TabDrop) => {
+    return layoutAfter(moved, drop) && dropLabel(panesRef.current, moved, drop);
+  };
+  const moveChat = (moved: MovedChat, drop: TabDrop) => guard(() => {
+    const before = new Map(panesRef.current.map((p) => [p.key, p]));
+    const out = layoutAfter(moved, drop, (chatId) => ({ key: newPaneKey(), view: newView(), chatId, tabs: [chatId] }));
+    if (!out) return;
+    navGen.current++;
+    setPanelHidden(true);
+    const panesNow = out.panes.map((p) => {
+      const was = before.get(p.key);
+      return was && was.chatId !== p.chatId ? { ...p, view: newView(), picked: undefined, jump: undefined, subagent: undefined, worktree: undefined } : p;
+    });
+    panesRef.current = panesNow;
+    setPanes(panesNow);
+    setSplitDir(out.dir);
+    activeKeyRef.current = out.active;
+    setActiveKey(out.active);
+    setReopening(undefined);
+    rememberChat(panesNow.find((p) => p.key === out.active)!.chatId);
+  });
+  const dropChat = (key: string, moved: MovedChat, zone: DropZone, index?: number) => moveChat(moved, { pane: key, zone, index });
+
+  /** Ctrl+Shift+PageUp and PageDown: the tab shown in the active pane moves one place left or right along its strip.
+   * Focus on a tab follows it. */
+  const shiftTab = (step: number) => {
+    const at = active.tabs.indexOf(active.chatId);
+    const to = step < 0 ? at - 1 : at + 2;
+    if (at < 0 || to < 0 || to > active.tabs.length) return;
+    const focused = (document.activeElement as Element | null)?.closest(`[data-pane="${CSS.escape(active.key)}"] .tabs`);
+    moveChat({ id: active.chatId, from: active.key }, { pane: active.key, zone: "tab", index: to });
+    if (focused) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pane="${CSS.escape(active.key)}"] .tab-open[aria-selected="true"]`)?.focus());
+  };
+
+  /** A tab's menu: the keyboard way to every drag of a tab (ADR 0052). Each item is the drop it stands for, said as
+   * the drop's hint says it; of items that would do the same, the first is kept. */
+  const tabMenu = (p: Pane, id: string | null): TabAction[] => {
+    const moved = { id, from: p.key };
+    const at = p.tabs.indexOf(id);
+    const shown = p.chatId === id;
+    const edgeIcons = { right: <PanelRight size={15} />, bottom: <PanelBottom size={15} />, left: <PanelLeft size={15} />, top: <PanelTop size={15} /> };
+    const items = (list: { drop: TabDrop; label: string; icon: ReactNode; keys?: string }[]) => {
+      const kept: { out: NonNullable<ReturnType<typeof layoutAfter>>; action: TabAction }[] = [];
+      for (const { drop, label, icon, keys } of list) {
+        const out = layoutAfter(moved, drop);
+        if (out && !kept.some((k) => sameMove(k.out, out))) kept.push({ out, action: { label, icon, keys, run: () => moveChat(moved, drop) } });
+      }
+      return kept.map((k) => k.action);
+    };
+    const along = items([
+      { drop: { pane: p.key, zone: "tab", index: at - 1 }, label: "Move tab left", icon: <ArrowLeft size={15} />, keys: shown ? chordLabel(keys.moveTabLeft[0]) : undefined },
+      { drop: { pane: p.key, zone: "tab", index: at + 2 }, label: "Move tab right", icon: <ArrowRight size={15} />, keys: shown ? chordLabel(keys.moveTabRight[0]) : undefined },
+    ]);
+    // Into the other pane's tabs first, as that is the plainest; then the edges of the tab's own pane.
+    const elsewhere = items([
+      ...panes
+        .filter((o) => o.key !== p.key)
+        .map((o) => ({
+          drop: { pane: o.key, zone: "tab" as const },
+          label: `${p.tabs.length === 1 ? "Merge into" : "Move to"} the ${paneNames(splitDir)[panes.indexOf(o)].toLowerCase()} pane`,
+          icon: <Columns2 size={15} />,
+        })),
+      ...EDGES.map((zone) => ({ drop: { pane: p.key, zone }, label: dropLabel(panes, moved, { pane: p.key, zone }), icon: edgeIcons[zone] })),
+      // The other pane's edges: the tab stays, and its pane goes to that side of the other one.
+      ...panes
+        .filter((o) => o.key !== p.key)
+        .flatMap((o) =>
+          EDGES.map((zone) => ({
+            drop: { pane: o.key, zone },
+            label: `Move this pane ${EDGE_SIDE[zone]} the ${paneNames(splitDir)[panes.indexOf(o)].toLowerCase()} pane`,
+            icon: edgeIcons[zone],
+          })),
+        ),
+    ]);
+    const groups = [along, elsewhere, [{ label: "Close tab", icon: <X size={15} />, run: () => closeTab(p.key, id) }]].filter((g) => g.length);
+    return groups.flatMap((g, i) => (i ? ["sep" as const, ...g] : g));
+  };
+
+  /** Ctrl+\: splits the chat on screen into a second pane, or closes the pane the owner isn't in. */
+  const toggleSplit = () => (other ? closePane(other.key) : splitWith(active.chatId));
+
+  // The panes showing a chat that leaves the list give way to the New chat pane. The active one does as New chat does.
+  const clearChat = (id: string) => {
+    if (!panes.some((p) => p.tabs.includes(id))) return;
+    if (active.chatId === id) openChat(null, { fresh: true, keepSettings: true });
+    setPanes((ps) =>
+      ps.map((p) =>
+        p.chatId === id
+          ? { ...p, view: newView(), chatId: null, tabs: navigateTabs(p.tabs, id, null).filter((t) => t !== id), picked: undefined, draftError: undefined }
+          : { ...p, tabs: p.tabs.filter((t) => t !== id) },
+      ),
+    );
+  };
+
+  // The other profile's chats replace the list, so one pane stays, on a fresh draft. The profile left keeps its last
+  // open chat for the next launch.
+  const switchProfileNow = (name: string, keepSettings = false) => {
+    navGen.current++;
+    const keep = activeKeyRef.current;
+    setGoTo(undefined);
+    setBotGo(undefined);
+    setFocusItem(undefined);
+    setPanes([{ key: keep, view: newView(), chatId: null, tabs: [null] }]);
+    activeKeyRef.current = keep;
+    setActiveKey(keep);
+    setReopening(undefined);
+    // The profile shows on the New chat pane; its stored last open chat stays for the next launch.
+    shown?.set(prefScope(connection, name), null);
+    if (!keepSettings) setSettingsOpen(false);
+    setProjectOpen(false);
+    setToast(null);
+    // What the Preview showed was the old profile's; the Screen tab starts again for the new one.
+    stepPreview({ kind: "clear" });
+    if (panelTab === "preview") setPanelOpen(false);
+    return hermes.switchProfile(name);
+  };
+  const switchProfile = (name: string) => guard(() => void switchProfileNow(name), "profile");
+  /**
+   * Settings → Profiles' switch (ADR 0156): the switcher's guard, then the switch. Resolves whether the app is on `name`
+   * once the switch has gone through; false when the owner stayed. `keepSettings`: a delete goes on in Settings.
+   */
+  const switchFromProfiles = (name: string, keepSettings?: boolean) =>
+    new Promise<boolean>((done) =>
+      guard(
+        () => void switchProfileNow(name, keepSettings).then(() => done(hermes.profile === name), () => done(hermes.profile === name)),
+        "profile",
+        () => done(false),
+      ),
+    );
+
+  // Another saved connection (ADR 0112). Whatever is running or waiting here is named first, from the inbox's entries,
+  // which cover every profile on this server; an unsaved persona or memory edit asks first too. Nothing is stopped:
+  // Hermes keeps a running reply going after this connection closes, as it does when the profile switches.
+  const [connectionAsk, setConnectionAsk] = useState<{ to: SavedConnection; notes: string[]; go: () => void; stay?: () => void }>();
+  const [removeAsk, setRemoveAsk] = useState<SavedConnection>();
+  const leavingConnection = (): string[] => {
+    const named = (es: InboxEntry[]) =>
+      es.slice(0, 3).map((e) => `“${e.title}” in ${e.profile}`).join(", ") + (es.length > 3 ? `, and ${es.length - 3} more` : "");
+    const waiting = inbox.entries.filter((e) => e.kind === "approval" && !e.ended);
+    const running = inbox.entries.filter((e) => e.kind === "running");
+    const notes: string[] = [];
+    if (waiting.length) notes.push(`${waiting.length === 1 ? "An Approval is" : `${waiting.length} Approvals are`} waiting for you: ${named(waiting)}.`);
+    if (running.length) notes.push(`${running.length === 1 ? "A reply is" : `${running.length} replies are`} running: ${named(running)}.`);
+    const here = leavingNote(profile, chats);
+    if (!notes.length && here) notes.push(here);
+    return notes;
+  };
+  const leaveConnection = (to: SavedConnection, go: () => void, stay?: () => void) =>
+    guard(() => {
+      const notes = leavingConnection();
+      if (notes.length) setConnectionAsk({ to, notes, go, stay });
+      else go();
+    }, "connection", stay);
+  if (connectionGuard) connectionGuard.current = (to) => new Promise((resolve) => leaveConnection(to, () => resolve(true), () => resolve(false)));
+  if (editGuard) editGuard.current = () => new Promise((resolve) => guard(() => resolve(true), "connection", () => resolve(false)));
+  const openConnections = () => guard(openSettings);
+  // A switch closes this connection only when no more than one can be live (ADR 0125); otherwise it stays live in the
+  // background, so there is nothing to ask about leaving.
+  const keepsLive = (liveLimit ?? 1) > 1;
+  const switchConnection = (c: SavedConnection) =>
+    keepsLive || servers.some((s) => s.id === c.id && s.status !== "needs-sign-in") ? guard(() => onSwitchConnection?.(c)) : leaveConnection(c, () => onSwitchConnection?.(c));
+  /** What is under way on a background connection, for the question before removing it. */
+  const backgroundNotes = (id: string): string[] => {
+    const s = servers.find((x) => x.id === id && !x.target);
+    const counts = s && liveCounts(s);
+    return counts ? [`It's live in the background with ${counts}.`] : [];
+  };
+  const connectionManager = onSwitchConnection && (
+    <ConnectionManager
+      connections={saved}
+      currentId={connection.id}
+      unsaved={savedUnsaved}
+      live={servers}
+      liveLimit={liveLimit}
+      onLiveLimit={onLiveLimit}
+      onUse={switchConnection}
+      onDisconnect={onDisconnect}
+      onTest={(c) => (onTestConnection ? onTestConnection(c) : Promise.reject(new Error("Testing isn't available here.")))}
+      onConnect={(c) => (keepsLive && onConnectBackground ? onConnectBackground(c) : switchConnection(c))}
+      onEdit={(c) => (c.id === connection.id ? guard(() => onEditConnection?.(c)) : leaveConnection(c, () => onEditConnection?.(c)))}
+      onRemove={(c) => (c.id === connection.id ? guard(() => setRemoveAsk(c), "signout") : setRemoveAsk(c))}
+      onRename={(c, name) => onRenameConnection?.(c, name)}
+      onAdd={() => onAddConnection?.()}
+    />
+  );
+
+  // An inbox entry opens its chat, in its own profile, in the pane already showing it or else the active one. Another
+  // profile is switched to first, the way the switcher does, and the chat opens once that profile's list has it.
+  // An unsaved persona or memory edit asks first, as any other way of leaving Settings does.
+  const openEntry = (e: InboxEntry) => {
+    setInboxOpen(false);
+    guard(() => {
+      if (e.profile !== profile) switchProfile(e.profile);
+      setGoTo({ entry: e, approval: e.kind === "approval" && !e.ended });
+    }, e.profile !== profile ? "profile" : "leave");
+  };
+  // A notification's click opens the card it is about, as its inbox entry does (ADR 0173).
+  const openEntryRef = useRef(openEntry);
+  openEntryRef.current = openEntry;
+  useEffect(() => hermes.onNoticeOpen((card) => openEntryRef.current(noticeEntry(card))), [hermes]);
+  // The waiting Approval card an inbox entry is about, when this connection's shown profile holds it: the inbox shows
+  // it whole, to answer there as in the chat (ADR 0173).
+  const approvalOf = (e: InboxEntry) => {
+    if (e.server || e.ended || e.kind !== "approval" || e.profile !== profile || !e.itemId) return undefined;
+    const card = chats.find((c) => c.id === e.chatId)?.items.find((i) => i.id === e.itemId);
+    return card?.kind === "approval" && isWaiting(card) ? card : undefined;
+  };
+
+  // A reply's desk goes where its inbox entry goes. A subagent's desk is always in the profile shown (ADR 0077), and
+  // opens in the pane already showing its chat, or else the active one.
+  const openDesk = (room: Room, desk: Desk) => {
+    setOfficeOpen(false);
+    if (desk.agent.kind === "reply" && desk.agent.entry) return openEntry(desk.agent.entry);
+    const pane = panes.find((p) => p.chatId === room.chatId)?.key ?? active.key;
+    openChat(room.chatId, { pane, ...(desk.agent.kind === "subagent" && { subagent: desk.agent.id }) });
+  };
+
+  useEffect(() => {
+    const e = goTo?.entry;
+    if (!goTo || !e || e.profile !== profile) return;
+    if (chats.some((c) => c.id === e.chatId)) {
+      const pane = panes.find((p) => p.chatId === e.chatId)?.key ?? active.key;
+      openChat(e.chatId, { pane });
+      setFocusItem({ pane, chatId: e.chatId, itemId: e.itemId, approval: goTo.approval });
+      setGoTo(undefined);
+    } else if (!switching && hermes.hasListed()) {
+      // The list holds the past month, so an older chat a check found is put in it the way a search result is. One
+      // deleted meanwhile says so once it fails to load.
+      hermes.reveal({ chatId: e.chatId, title: e.title, source: e.source ?? "app", settled: true, updatedAt: e.at || Date.now(), snippet: [] });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- run when the entry, profile or list changes; `openChat` is a new function each render and would run it, and reveal the chat again, on every render
+  }, [goTo, profile, chats, switching]);
+
+  // A bot's row opens its Bot Chat, in the bot's own profile (ADR 0066): another profile is switched to first, as the
+  // switcher does, and once its list has loaded the Bot Chat is looked up by title and opened in the active pane. It isn't
+  // remembered for the next launch: what reopens a Bot Chat is its bot's row. The pen starts an ordinary chat there.
+  const botEdit = useMemo<BotEditWiring>(() => ({ look: (name) => hermes.botLook(name), edit: (name, edits) => hermes.editBot(name, edits) }), [hermes]);
+  const loadBots = useCallback(() => hermes.bots(), [hermes]);
+  const activityOf = (b: Bot, roster: readonly Bot[]) => {
+    const ids = b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [];
+    const open = b.profile === profile ? chats.find((c) => ids.includes(c.id)) : undefined;
+    return botActivity(b, live?.sessions ?? [], open && { running: open.running, waiting: open.items.some(isWaiting) }, roster);
+  };
+  // A Bot Chat waiting on the owner in any profile: one shown here, or a live one known by its title or, for one
+  // resumed here earlier, whose row says no title, by the ids the roster named.
+  const botsNeedYou =
+    chats.some((c) => isBotChat(c) && c.items.some(isWaiting)) ||
+    (live?.sessions ?? []).some((s) => s.status === "waiting" && (isBotChatTitle(s.title) || hermes.isKnownBotChat(s.chatId, s.profile)));
+  // Bot mode (ADR 0066): while the active pane shows a Bot Chat, the list panel shows the bots in its place. It follows
+  // the open chat, so New chat or any other chat opened leaves it, and a launch, which never reopens a Bot Chat, starts
+  // without it. A bot opened from bot mode holds it until its Bot Chat opens, so the next profile's chats don't flash.
+  const shownChat = chats.find((c) => c.id === active.chatId);
+  const botsInList =
+    caps.caps.botMode.state !== "unsupported" &&
+    ((!!shownChat && isBotChat(shownChat)) || (botGo?.stay === true && botGo.then === "open" && botGo.nav === navGen.current));
+  const connected = status === "connected";
+  useEffect(() => {
+    if (!botsInList || !connected) return;
+    // The Bots view reports a failed read; the panel keeps the roster read last.
+    const read = () => void hermes.bots().catch(() => {});
+    read();
+    const every = setInterval(read, BOTS_REFRESH_MS);
+    return () => clearInterval(every);
+  }, [hermes, botsInList, connected]);
+  const openBot = (b: Bot, then: "open" | "new") => {
+    setBotsOpen(false);
+    guard(() => {
+      if (b.profile !== profile) void switchProfileNow(b.profile);
+      // Anything the owner opens or switches to after this, before the Bot Chat opens, wins over it (`navGen`).
+      setBotGo({ bot: b, then, nav: navGen.current, stay: botsInList });
+    }, b.profile !== profile ? "profile" : "leave");
+  };
+  useEffect(() => {
+    const go = botGo;
+    if (!go) return;
+    if (navGen.current !== go.nav) return setBotGo(undefined);
+    if (go.opening || go.bot.profile !== profile || switching || !hermes.hasListed()) return;
+    if (go.then === "new") {
+      setBotGo(undefined);
+      newChat();
+      return;
+    }
+    const opening = { ...go, opening: true };
+    setBotGo(opening);
+    const still = () => navGen.current === go.nav && hermes.profile === go.bot.profile;
+    hermes
+      .openBotChat(go.bot)
+      .then((id) => still() && openChat(id, { remember: false }))
+      .catch((e: unknown) => still() && setToast({ text: (e as Error).message, at: Date.now() }))
+      .finally(() => setBotGo((g) => (g === opening ? undefined : g)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- run when the bot pick, profile or list changes; `newChat` and `openChat` are new functions each render and would run it on every render
+  }, [botGo, profile, switching, chats]);
+
+  // The Approval card or message an entry is about is scrolled to and focused once its chat shows it. Focus goes to
+  // the card itself, never to one of its answers. An Approval in a chat this connection hadn't resumed shows once it
+  // loads; if none is waiting by then, the chat is simply open.
+  useEffect(() => {
+    if (!focusItem) return;
+    const pane = document.querySelector(`[data-pane="${CSS.escape(focusItem.pane)}"]`);
+    const el = focusItem.itemId
+      ? pane?.querySelector<HTMLElement>(`[data-item="${CSS.escape(focusItem.itemId)}"]`)
+      : focusItem.approval
+        ? pane?.querySelector<HTMLElement>(".approval:not(.answered)")
+        : undefined;
+    if (el) {
+      el.scrollIntoView?.({ block: "center" });
+      if (el.tabIndex < 0 && !el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+      el.focus();
+      setFocusItem(undefined);
+      return;
+    }
+    const chat = chats.find((c) => c.id === focusItem.chatId);
+    if (!focusItem.itemId && !focusItem.approval) setFocusItem(undefined);
+    else if (chat?.runtimeId && !chat.loading) setFocusItem(undefined);
+  }, [focusItem, chats]);
+
+  // Undo sends the opposite change, not a stored copy, so it also works once the list has refreshed. Settling forgets
+  // a snooze, which Undo puts back.
+  const setSettled = (id: string, settled: boolean) => {
+    const title = chats.find((c) => c.id === id)?.title ?? "";
+    const snoozedUntil = settled && snoozeStore.isSnoozed(id) ? snoozes[id] : undefined;
+    const move = (s: boolean) => void (s ? hermes.settle(id) : hermes.unsettle(id));
+    move(settled);
+    if (settled) snoozeStore.wake(id);
+    setToast({
+      text: `${settled ? "Settled" : "Unsettled"}: ${title}`,
+      undo: () => {
+        move(!settled);
+        if (snoozedUntil) snoozeStore.snooze(id, snoozedUntil);
+      },
+      at: Date.now(),
+    });
+  };
+
+  // Unlike setSettled's, this Undo has no snooze to put back: Inbox chats aren't snoozed or pinned.
+  const settleAll = (ids: string[]) => {
+    const profile = hermes.profile;
+    const many = (n: number) => `${n} chat${n === 1 ? "" : "s"}`;
+    void hermes.settleAll(ids).then((failed) => {
+      if (!stillIn(profile)) return;
+      const went = ids.filter((id) => !failed.includes(id));
+      if (!went.length) return setToast({ text: `Couldn't settle ${many(ids.length)}. ${ids.length === 1 ? "It's" : "They're"} still in the Inbox.`, at: Date.now() });
+      const text = failed.length
+        ? `Settled ${many(went.length)}. ${many(failed.length)} couldn't be settled and ${failed.length === 1 ? "is" : "are"} still in the Inbox.`
+        : `Settled ${many(went.length)}`;
+      setToast({ text, undo: () => went.forEach((id) => void hermes.unsettle(id)), at: Date.now() });
+    });
+  };
+
+  // Snoozing is kept on this computer only; Undo puts back what the chat had.
+  const snoozeChat = (id: string, until: number | undefined) => {
+    const title = chats.find((c) => c.id === id)?.title ?? "";
+    const before = snoozeStore.isSnoozed(id) ? snoozes[id] : undefined;
+    const put = (to: number | undefined) => (to ? snoozeStore.snooze(id, to) : snoozeStore.wake(id));
+    // Unsnoozing wakes it now, so it comes to the top as a snooze that ran out would.
+    put(until ?? Date.now());
+    setToast({ text: `${until ? `Snoozed until ${wakeFull(until)}` : "Unsnoozed"}: ${title}`, undo: () => put(before), at: Date.now() });
+  };
+
+  // Pinning is kept on this computer only; Undo puts the chat back where it was, a pin back in its old place.
+  const pinChat = (id: string, on: boolean) => {
+    const title = chats.find((c) => c.id === id)?.title ?? "";
+    const before = pins[id];
+    const put = (to: boolean, at?: number) => (to ? pinStore.pin(id, at) : pinStore.unpin(id));
+    put(on);
+    setToast({ text: `${on ? "Pinned" : "Unpinned"}: ${title}`, undo: () => put(!on, before), at: Date.now() });
+  };
+
+  // Putting a chat in a project, or taking it out: Hermes's once it keeps membership, waiting here until it confirms,
+  // and this computer's otherwise (ADR 0109). Undo puts it back.
+  const setInProject = (chatId: string, p: Project, inProject: boolean) => {
+    const title = chats.find((c) => c.id === chatId)?.title ?? "";
+    projects.setChat(p.id, chatId, inProject);
+    setToast({
+      text: `${inProject ? `Put in ${p.name}` : `Taken out of ${p.name}`}: ${title}`,
+      undo: () => projects.setChat(p.id, chatId, !inProject),
+      at: Date.now(),
+    });
+  };
+
+  // Deleting can't be undone, so the row asked first. A pane showing the chat gives way to a fresh draft. A refused
+  // delete says why in the list instead of the toast.
+  const deleteChat = (id: string) => {
+    const title = chats.find((c) => c.id === id)?.title ?? "";
+    clearChat(id);
+    return hermes.delete(id).then((deleted) => {
+      if (deleted) {
+        desk?.change({ kind: "gone", key: draftKey(connection, profile, id) });
+        projects.forgetChat(id);
+        savedContextLedger.forgetChat(scope, id);
+        tagChange(() => tagsStore.forgetChat(id));
+        snoozeStore.wake(id);
+        pinStore.unpin(id);
+        if (stillIn(profile)) setToast({ text: `Deleted: ${title}`, at: Date.now() });
+      }
+      return deleted;
+    });
+  };
+
+  // Archiving hides the chat in every Hermes client and keeps its history; the toast shows once Hermes confirms it. A
+  // pane showing the chat gives way to a fresh draft, as it leaves the list. A write that didn't go in says why in the
+  // list.
+  const setArchived = (id: string, archived: boolean) => {
+    const title = chats.find((c) => c.id === id)?.title ?? "";
+    if (archived && !archivedListed) clearChat(id);
+    const done = (ok: boolean) => {
+      if (ok && archived) desk?.change({ kind: "gone", key: draftKey(connection, profile, id) });
+      if (ok && stillIn(profile))
+        setToast({ text: `${archived ? "Archived" : "Restored"}: ${title}`, undo: archived ? () => setArchived(id, false) : undefined, at: Date.now() });
+    };
+    void (archived ? hermes.archive(id) : hermes.restore(id)).then(done);
+  };
+
+  // A chat open in a pane that a list read leaves out is asked for. The list reaches back a month, so one older than
+  // that, or one archived elsewhere, is put back in the list and stays open. One Hermes no longer has, deleted in
+  // another client, leaves its panes as one deleted here does, and its Draft goes with them to the New chat pane: a
+  // send there starts a chat instead of reaching none, and nothing typed is lost (#467). A check that can't reach Hermes
+  // changes nothing, and the next list read asks again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one set per connection and profile: keyed on `scope`, which the factory does not read
+  const askedGone = useMemo(() => new Set<string>(), [scope]);
+  // The chats Hermes said it no longer has, whose panes gave way: known at once, before the panes render again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one set per connection and profile: keyed on `scope`, which the factory does not read
+  const goneChats = useMemo(() => new Set<string>(), [scope]);
+  const clearChatRef = useRef(clearChat);
+  clearChatRef.current = clearChat;
+  /** `typed`: the words of a send that found the chat out of the list, back to the Draft the owner will see. */
+  const chatGone = (id: string, typed = "") => {
+    const shown = !goneChats.has(id) && panesRef.current.some((p) => p.tabs.includes(id));
+    keepDraft(draftKey(connection, profile, shown ? id : null), typed);
+    if (askedGone.has(id) || !shown) return;
+    askedGone.add(id);
+    const at = profile;
+    hermes
+      .findChat(id, at)
+      .then((found) => {
+        if (hermes.profile !== at) return;
+        if (found) return void hermes.reveal(found);
+        goneChats.add(id);
+        keepDraft(draftKey(connection, at, null), savedDrafts.take(draftKey(connection, at, id)));
+        const shown = panesRef.current.filter((p) => p.chatId === id).map((p) => p.key);
+        clearChatRef.current(id);
+        if (shown.length)
+          setPanes((ps) => ps.map((p) => (shown.includes(p.key) && p.chatId === null ? { ...p, draftError: CHAT_LEFT_LIST } : p)));
+      })
+      .catch(() => {})
+      .finally(() => askedGone.delete(id));
+  };
+  useEffect(() => {
+    if (switching || reopening || status !== "connected" || !hermes.hasListed()) return;
+    for (const id of new Set(panes.flatMap((p) => p.tabs))) if (id !== null && !chats.some((c) => c.id === id)) chatGone(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- check when the list or the panes change; `chatGone` is a new function each render and would check again on every render
+  }, [chats, panes, switching, reopening, status]);
+
+  // The chat to reopen opens as soon as the list has it, the saved one at first, and stays open once the list read from
+  // Hermes has it too. If that list doesn't, the chat was deleted, archived, or is older than the list reaches: the New
+  // chat pane shows instead, and the chat isn't looked for at the next launch. Only the first pane reopens anything;
+  // opening a second pane ends the wait.
+  useEffect(() => {
+    if (!reopening) return;
+    const listed = hermes.hasListed();
+    if (chats.some((c) => c.id === reopening)) {
+      patchPane(firstPane.current, { chatId: reopening });
+      if (!listed) return;
+    } else if (listed) {
+      patchPane(firstPane.current, { chatId: null });
+      forgetOpenChat(pref, reopening);
+      shown?.set(pref, null);
+    } else return;
+    setReopening(undefined);
+  }, [hermes, reopening, chats, pref, shown]);
+
+  useEffect(() => {
+    if (!toast) return;
+    // A toast that offers somewhere to go stays longer than one that only says something.
+    const timer = setTimeout(() => setToast(null), toast.action ? ACTION_TOAST_MS : TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  // Out of focus, Hermes notifies instead of marking the chats on screen read (transport.ts `setFocused`).
+  useEffect(() => {
+    hermes.setFocused(document.hasFocus());
+    const onFocus = () => hermes.setFocused(true);
+    const onBlur = () => hermes.setFocused(false);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [hermes]);
+
+  useEffect(() => {
+    if (status === "connected") void projects.load();
+  }, [projects, status]);
+
+  // Back on the network: don't wait for the next retry, or for the owner if it gave up.
+  useEffect(() => {
+    const onOnline = () => void hermes.reconnect();
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [hermes]);
+
+  useEffect(() => {
+    void hermes.sync();
+    const timer = setInterval(() => void hermes.sync(), SYNC_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [hermes]);
+
+  // The models the profile offers, read once connected, and again for each profile.
+  useEffect(() => {
+    if (status === "connected") void hermes.loadModels();
+  }, [hermes, status, profile]);
+
+  // Switching profile restores its own pick, or seeds its default once the model list is read.
+  useEffect(() => {
+    const pick = getUIPrefs().modelPicker;
+    if (catalog?.defaultPick && pick?.profile !== pref) setUIPrefs({ modelPicker: { ...(getUIPrefs().modelPicks[pref] ?? catalog.defaultPick), profile: pref } });
+  }, [catalog, pref]);
+
+  // The tray (ADR 0034). Its New chat and Open Inbox come here once Rust has shown the window; New chat asks first
+  // about an unsaved edit, as the app's own New chat does. While a modal dialog is open (a Server file being edited,
+  // a question), they only bring the window forward, as the app's shortcuts stop at a modal: the owner sees the dialog
+  // and decides. The tray is told only how many Inbox entries need the owner, for its menu and the dot on its icon,
+  // never what they say; signing out clears it.
+  const trayCovered = () => covered || !!document.querySelector('[aria-modal="true"]');
+  const trayNewChat = useRef(() => {});
+  trayNewChat.current = () => trayCovered() || newChat();
+  const trayInbox = useRef(() => {});
+  trayInbox.current = () => {
+    if (trayCovered()) return;
+    setBotsOpen(false);
+    setOfficeOpen(false);
+    setInboxOpen(true);
+  };
+  useEffect(() => tray.onNewChat(() => trayNewChat.current()), [tray]);
+  useEffect(() => tray.onOpenInbox(() => trayInbox.current()), [tray]);
+  useEffect(() => tray.reportInbox(inboxCount), [tray, inboxCount]);
+  useEffect(() => () => tray.reportInbox(0), [tray]);
+  // Hidden to the tray, the window shows no chat: replies arriving meanwhile leave their chats Unread.
+  const windowHidden = useWindowHidden();
+  const pageHidden = usePageHidden();
+  // The office is drawn, and its rooms worked out, only while it can be seen: hidden to the tray or minimized, it isn't.
+  const officeVisible = officeShown && !windowHidden && !pageHidden;
+
+  // The inbox and the bots, in their view or the list panel, ask for fresh checks as they open, and keep asking while
+  // open: they show what is live.
+  const liveWatched = inboxOpen || botsOpen || botsInList;
+  useEffect(() => {
+    if (!liveWatched) return;
+    void hermes.checkOtherProfiles();
+    const timer = setInterval(() => void hermes.checkOtherProfiles(), INBOX_CHECK_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [hermes, liveWatched]);
+  // The office keeps every profile's floor live from `session.active_list` alone, as often as the transport allows,
+  // while it can be seen (ADR 0122). It leaves the heavier read of the other profiles' chat lists at CHECK_EVERY_MS.
+  useEffect(() => {
+    if (!officeVisible) return;
+    void hermes.checkLive();
+    const timer = setInterval(() => void hermes.checkLive(), LIVE_MIN_GAP_MS);
+    return () => clearInterval(timer);
+  }, [hermes, officeVisible]);
+
+  // Unread chats in the other profiles are polled, so the switcher can be up to CHECK_EVERY_MS behind.
+  useEffect(() => {
+    void hermes.checkOtherProfiles();
+    const timer = setInterval(() => void hermes.checkOtherProfiles(), CHECK_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [hermes]);
+
+  /** Makes a pane the active one and puts the cursor in its composer, as Ctrl+1 and Ctrl+2 do. */
+  const focusPane = (key: string) => {
+    flushSync(() => activate(key));
+    document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(key)}"] .composer textarea`)?.focus();
+  };
+
+  // Chat links (ADR 0037). Everything is checked before anything moves: the link's connection is this one, Hermes is
+  // connected, the server has the profile and the profile has the chat. Only then does the app switch profile, asking
+  // first as the switcher does, and open the chat. A link that can't open changes nothing on screen, so the composer
+  // and its draft stay as they were. Nothing is ever sent. `attempt` tells a retry from the try it replaces, so an
+  // answer that comes back late, or after Cancel, is dropped.
+  type LinkJob = { link: ChatLink; at: number; reveal?: LinkReveal; attempt: number; stage: "check" | "wait" | "locate" | "confirm" | "switch"; found?: Found; from?: string; gen?: number };
+  const [linkJob, setLinkJob] = useState<LinkJob>();
+  const [linkError, setLinkError] = useState<LinkNoticeView>();
+  const linkJobRef = useRef(linkJob);
+  linkJobRef.current = linkJob;
+  const linkRan = useRef("");
+  const isCurrent = (job: LinkJob) => linkJobRef.current?.at === job.at && linkJobRef.current.attempt === job.attempt;
+  const opened = (job: Pick<LinkJob, "reveal">) => (hitOf(job.reveal) ? "search result" : "linked chat");
+  const hereLabel = connectionLabel(connectionKey(connection));
+  // With more than one connection live, every chat says which server and profile it is on (ADR 0125).
+  const serverBadge = servers.length > 1 ? `${"name" in connection ? connection.name : hereLabel} · ${profile}` : undefined;
+  const failLink = (text: string, actions?: LinkNoticeView["actions"]) => {
+    linkJobRef.current = undefined;
+    setLinkJob(undefined);
+    setLinkError({ kind: "error", text, actions });
+  };
+  const retryLink = (job: LinkJob) => {
+    setLinkError(undefined);
+    const next: LinkJob = { link: job.link, at: job.at, reveal: job.reveal, attempt: job.attempt + 1, stage: "check" };
+    linkJobRef.current = next;
+    setLinkJob(next);
+  };
+
+  useEffect(() => {
+    if (!link) return;
+    onLinkTaken?.(link.at);
+    if (linkJobRef.current?.at === link.at) return;
+    setLinkError(undefined);
+    const job: LinkJob = { link: link.link, at: link.at, reveal: link.reveal, attempt: 0, stage: "check" };
+    linkJobRef.current = job;
+    setLinkJob(job);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- take each arrived link once, keyed on its `at`; `onLinkTaken` is a new function each render and would run it on every render
+  }, [link?.at]);
+
+  // An unsaved edit in Settings asks first. Its answer may come after the link was cancelled or replaced, so the link
+  // is checked again then; Keep editing drops the link.
+  const stayed = (job: LinkJob) => () => {
+    if (isCurrent(job)) closeLinkNotice();
+  };
+
+  useEffect(() => {
+    if (linkSuperseded !== undefined) closeLinkNotice();
+  }, [linkSuperseded]);
+
+  const openLinked = (job: LinkJob, found: Found) => {
+    if (!isCurrent(job)) return;
+    guard(
+      () => {
+        if (!isCurrent(job) || hermes.profile !== job.link.profile) return;
+        linkJobRef.current = undefined;
+        setLinkJob(undefined);
+        hermes.reveal(found);
+        const pane = panesRef.current.find((p) => p.chatId === found.chatId)?.key ?? activeKeyRef.current;
+        const reveal = job.reveal;
+        const hit = hitOf(reveal);
+        // Already asked, just above.
+        openChat(found.chatId, { pane, keepSettings: true, picked: hit && { ...found, snippet: hit.snippet, find: hit.find, role: hit.role } });
+        setSettingsOpen(false);
+        if (!reveal) requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(pane)}"] .composer textarea`)?.focus());
+        else if (!("hit" in reveal)) setFocusItem({ pane, chatId: found.chatId, ...reveal });
+      },
+      "leave",
+      stayed(job),
+    );
+  };
+
+  const switchForLink = (job: LinkJob, found: Found) => {
+    if (!isCurrent(job)) return;
+    const next: LinkJob = { ...job, stage: "switch", found, from: hermes.profile };
+    linkJobRef.current = next;
+    setLinkJob(next);
+    guard(
+      () => {
+        if (!isCurrent(next) || hermes.profile !== next.from) return;
+        void switchProfileNow(job.link.profile);
+        // The switch itself is a move; only the owner's moves after it drop the link.
+        const switched: LinkJob = { ...next, gen: navGen.current };
+        linkJobRef.current = switched;
+        setLinkJob(switched);
+      },
+      "profile",
+      stayed(next),
+    );
+  };
+
+  const runLink = async (job: LinkJob) => {
+    const key = `${job.at}/${job.attempt}`;
+    if (linkRan.current === key || !isCurrent(job)) return;
+    linkRan.current = key;
+    const p = job.link.profile;
+    const conn = checkConnection(job.link, connection, refs);
+    if (conn.kind === "other")
+      return failLink(
+        `This link is for ${conn.label}, not the connection signed in now (${hereLabel}). To open it, connect to ${conn.label} in Setup, then open the link again.`,
+        onSetUp ? [{ label: "Open Setup", onClick: () => (setLinkError(undefined), guard(onSetUp)) }] : undefined,
+      );
+    if (conn.kind === "unknown")
+      return failLink(
+        `This link is for a connection this computer doesn't know, perhaps one from another computer. Links carry no server address or sign-in, so Highwing won't connect anywhere for it. If the chat is on ${hereLabel}, you can open it here.`,
+        [{ label: "Open it here", onClick: () => (refs.alias(job.link.connection, connection), retryLink(job)) }],
+      );
+    if (hermes.getSnapshot().status !== "connected") {
+      const next: LinkJob = { ...job, stage: "wait" };
+      linkJobRef.current = next;
+      return setLinkJob(next);
+    }
+    const looking: LinkJob = { ...job, stage: "locate" };
+    linkJobRef.current = looking;
+    setLinkJob(looking);
+    // Going anywhere while the lookup runs, to another profile or chat, even back again, is newer than the link, so
+    // its answer is dropped.
+    const startedAt = navGen.current;
+    const startedIn = hermes.profile;
+    const movedOn = () => {
+      if (navGen.current === startedAt && hermes.profile === startedIn) return false;
+      if (isCurrent(job)) closeLinkNotice();
+      return true;
+    };
+    let located: Awaited<ReturnType<typeof locateChat<Found>>>;
+    try {
+      located = await locateChat<Found>(job.link, hermes);
+    } catch (e) {
+      if (!isCurrent(job) || movedOn()) return;
+      return failLink(`Highwing couldn't look the ${opened(job)} up: ${errorText(e)}`, [{ label: "Try again", onClick: () => retryLink(job) }]);
+    }
+    if (!isCurrent(job) || movedOn()) return;
+    if (located.kind === "no-profile")
+      return failLink(`This server has no profile named ${p} now. It may have been renamed or deleted, so the ${opened(job)} wasn't opened.`);
+    if (located.kind === "no-chat")
+      return failLink(`The ${p} profile has no chat with this ${hitOf(job.reveal) ? "search result" : "link"}'s id. It may have been deleted, so there's nothing to open.`);
+    const found = located.found;
+    if (p === hermes.profile) return openLinked(job, found);
+    const snap = hermes.getSnapshot();
+    if (leavingNote(snap.profile, snap.chats)) {
+      const next: LinkJob = { ...job, stage: "confirm", found };
+      linkJobRef.current = next;
+      return setLinkJob(next);
+    }
+    switchForLink(job, found);
+  };
+
+  useEffect(() => {
+    if (linkJob?.stage === "check") void runLink(linkJob);
+    // Hermes connected (or came back) while the link waited.
+    else if (linkJob?.stage === "wait" && status === "connected") retryLink(linkJob);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- run when the link job or the status changes; `runLink` is a new function each render and would run it on every render
+  }, [linkJob, status]);
+
+  // The switch to the linked chat's profile: it opens once that profile's list has been read. The owner going to
+  // a third profile meanwhile drops it; still in the first one, the switch may be waiting on an unsaved edit's question.
+  useEffect(() => {
+    if (linkJob?.stage !== "switch" || !linkJob.found) return;
+    // The owner went somewhere while the profile loaded.
+    if (linkJob.gen !== undefined && navGen.current !== linkJob.gen) return closeLinkNotice();
+    if (profile !== linkJob.link.profile) {
+      if (profile !== linkJob.from) closeLinkNotice();
+      return;
+    }
+    if (switching?.error) return failLink(`Highwing switched to ${profile} but couldn't load its chats: ${switching.error}`);
+    if (!switching) openLinked(linkJob, linkJob.found);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- run when the link job, profile or switch changes; `openLinked` is a new function each render and would open the chat again on every render
+  }, [linkJob, profile, switching]);
+
+  const linkView: LinkNoticeView | undefined =
+    linkError ??
+    (linkJob &&
+      (linkJob.stage === "confirm" && linkJob.found
+        ? {
+            kind: "confirm",
+            text: `${leavingNote(profile, chats) ?? ""} Switch to ${linkJob.link.profile} to open the ${opened(linkJob)}?`.trim(),
+            actions: [{ label: `Switch to ${linkJob.link.profile}`, onClick: () => switchForLink(linkJob, linkJob.found!) }],
+          }
+        : {
+            kind: "pending",
+            text:
+              linkJob.stage === "wait"
+                ? `The ${opened(linkJob)} opens once Hermes is connected. Nothing is sent.`
+                : linkJob.stage === "switch"
+                  ? `Switching to ${linkJob.link.profile} to open the ${opened(linkJob)}…`
+                  : `Opening the ${opened(linkJob)} in ${linkJob.link.profile}…`,
+          }));
+  const closeLinkNotice = () => {
+    linkJobRef.current = undefined;
+    setLinkJob(undefined);
+    setLinkError(undefined);
+  };
+
+  /** Copies a link that opens `chat`, in this connection and profile, in Hermes Chat on this computer. */
+  const copyChatLink = (chat: Chat) => {
+    const url = formatChatLink({ connection: refs.refFor(connection), profile, chatId: chat.id });
+    const done = () => setToast({ text: "Chat link copied. It opens this chat in Highwing on this computer.", at: Date.now() });
+    const failed = (e?: unknown) => setToast({ text: `Couldn't copy the chat link${e ? `: ${errorText(e)}` : "."}`, at: Date.now() });
+    if (!navigator.clipboard?.writeText) return failed();
+    navigator.clipboard.writeText(url).then(done, failed);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (covered || composing(e)) return;
+      // Ctrl+Z outside a text field runs the notice's Undo, as its button does; in one it is always text undo.
+      const step = editStep(e);
+      if (step) {
+        if (step === "undo" && toast?.undo && !e.defaultPrevented && !isTextField(e.target) && !document.querySelector('[aria-modal="true"]')) {
+          e.preventDefault();
+          toast.undo();
+          setToast(null);
+        }
+        return;
+      }
+      if (screenshotShortcut && shortcutOf(e) === screenshotShortcut && !checkShortcut(screenshotShortcut).error) {
+        e.preventDefault();
+        if (!e.repeat) takeScreenshot();
+        return;
+      }
+      if (e.defaultPrevented) return;
+      const onChat = !covering && !previewCovers && !projectScreenOpen && !searchOpen;
+      const command = pickApp(e);
+      switch (command) {
+        case "chatBelow":
+        case "chatAbove": {
+          // A select keeps Alt+Down to open.
+          if (!onChat || (e.target as Element | null)?.tagName === "SELECT") return;
+          const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins, handoffMap);
+          const order = [...pinned, ...inbox, ...working];
+          const at = order.findIndex((c) => c.id === active.chatId);
+          const next = order[at < 0 ? 0 : at + (command === "chatBelow" ? 1 : -1)];
+          if (next) {
+            e.preventDefault();
+            openChat(next.id);
+          }
+          return;
+        }
+        case "search":
+          e.preventDefault();
+          setSearchStart(undefined);
+          setSearchOpen((o) => !o);
+          return;
+        case "newChat":
+          e.preventDefault();
+          newChat();
+          return;
+        case "nextTab":
+        case "prevTab":
+          if (!onChat) return;
+          e.preventDefault();
+          cycleTab(command === "nextTab" ? 1 : -1);
+          return;
+        case "moveTabLeft":
+        case "moveTabRight":
+          if (!onChat) return;
+          e.preventDefault();
+          shiftTab(command === "moveTabLeft" ? -1 : 1);
+          return;
+        case "toggleList":
+          e.preventDefault();
+          setListOpen((o) => !o);
+          return;
+        case "settings":
+          e.preventDefault();
+          openSettings();
+          return;
+        case "toggleSplit":
+          e.preventDefault();
+          toggleSplit();
+          return;
+        case "focusLeft":
+        case "focusRight":
+          if (!split || settingsOpen || jobsOpen || automationsOpen || repoOpen) return;
+          e.preventDefault();
+          focusPane(panes[command === "focusLeft" ? 0 : 1].key);
+          return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // Side by side when the chat keeps its minimum width beside the narrowest pane; otherwise the pane covers the chat.
+  // Width 0 means it couldn't be measured, which counts as wide.
+  const previewFits = !mainWidth || mainWidth >= CHAT_MIN_WIDTH + PANE_MIN_WIDTH;
+  const paneMax = mainWidth ? mainWidth - CHAT_MIN_WIDTH : 1200;
+  const paneWidth = Math.min(Math.max(dragWidth ?? previewWidth ?? PREVIEW_DEFAULT_WIDTH, PANE_MIN_WIDTH), Math.max(PANE_MIN_WIDTH, paneMax));
+  // Settings covers the chat, and the side panel with it; so do the project screen, Scheduled jobs, Automations, Usage
+  // and the Repository screen.
+  const covering = settingsOpen || projectScreenOpen || jobsOpen || automationsOpen || usageOpen || workOpen || repoOpen || officeVisible;
+  const previewShown = panelOpen && !covering && (previewFits || !panelHidden);
+  const previewCovers = previewShown && !previewFits;
+
+  // `hermes-chat --show`, `--toggle` or a second launch brought the window forward: the cursor goes back in the selected pane's
+  // composer, its draft as it was. Settings or another screen over the chat stays as it was left, unsaved edits and all.
+  // From another app, text selected or copied there since the window last lost focus is quoted after that draft, never
+  // sent (ADR 0172). The selections are read only with the setting on.
+  const [selectionWatch] = useState(() => new SelectionWatch());
+  const readSelection = summonSelection ? summon?.readSelection : undefined;
+  useEffect(() => {
+    if (!readSelection) return;
+    const read = () => {
+      const ticket = selectionWatch.reading();
+      void readSelection().then((s) => selectionWatch.remember(ticket, s), () => {});
+    };
+    read();
+    window.addEventListener("blur", read);
+    return () => window.removeEventListener("blur", read);
+  }, [readSelection, selectionWatch]);
+  const chatCovered = () => covered || covering || previewCovers || searchOpen;
+  const prefillRef = useRef((_: string | undefined) => {});
+  prefillRef.current = (text) => {
+    if (!text || chatCovered()) return;
+    flushSync(() => keepDraft(draftKey(connection, profile, active.chatId), quoted(text)));
+    focusPane(active.key);
+    const composer = document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(active.key)}"] .composer textarea`);
+    composer?.setSelectionRange(composer.value.length, composer.value.length);
+  };
+  const onSummonedRef = useRef((_: Summoned) => {});
+  onSummonedRef.current = ({ fromElsewhere }) => {
+    if (chatCovered()) return;
+    focusPane(active.key);
+    if (fromElsewhere && readSelection)
+      void untilFocused().then(() => {
+        const ticket = selectionWatch.reading();
+        return readSelection().then((s) => prefillRef.current(selectionWatch.take(ticket, s)), () => {});
+      });
+  };
+  useEffect(() => summon?.onSummoned((s) => onSummonedRef.current(s)), [summon]);
+
+
+  // Each pane's tab strip above its chat, and the pane as a place to drop a chat dragged from the list or a tab.
+  const withTabs = (p: Pane, chatNode: ReactNode, controls: ReactNode) => (
+    <>
+      <TabStrip
+        pane={p.key}
+        tabs={p.tabs.map((id) => {
+          const c = id === null ? undefined : chats.find((c) => c.id === id);
+          return { id, title: c?.title ?? "New chat", running: c?.running, unread: c?.unread };
+        })}
+        current={p.chatId}
+        onPick={(id) => openChat(id, { pane: p.key })}
+        onClose={(id) => closeTab(p.key, id)}
+        onNew={() => openChat(null, { pane: p.key, fresh: true, newTab: true })}
+        preview={(moved, zone, index) => previewMove(moved, { pane: p.key, zone, index })}
+        onDropChat={(moved, zone, index) => dropChat(p.key, moved, zone, index)}
+        menu={(id) => tabMenu(p, id)}
+        lastClosable={split}
+        controls={controls}
+      />
+      <PaneDrop preview={(moved, zone) => previewMove(moved, { pane: p.key, zone })} onDropChat={(moved, zone) => dropChat(p.key, moved, zone)}>
+        {chatNode}
+      </PaneDrop>
+    </>
+  );
+
+  // A compared send goes to both chats, so it waits until neither has a send under way, a reply running or messages
+  // waiting.
+  const compareBusy =
+    comparing &&
+    (status !== "connected" ||
+      compareSends > 0 ||
+      comparing.some((side) => side.chatId !== null && (chats.find((c) => c.id === side.chatId)?.running || hermes.getSnapshot().queues[side.chatId]?.items.length)));
+  const slots: PaneSlot[] = panes.map((p, i) => {
+    const listed = p.chatId === null ? undefined : chats.find((c) => c.id === p.chatId);
+    const chat = listed ?? draftChat(p.draftError);
+    const isActive = p.key === active.key;
+    const side = comparing?.find((s) => s.pane === p.key);
+    const partner = comparing?.find((s) => s !== side);
+    return {
+      key: p.key,
+      title: chat.title,
+      node: withTabs(
+        p,
+        desk && <ChatView
+          openGuide={openGuide}
+          hermes={hermes}
+          connection={connection}
+          profile={profile}
+          status={status}
+          paneKey={p.key}
+          chatId={p.chatId}
+          chat={chat}
+          started={!!listed}
+          picked={p.picked}
+          jump={p.jump}
+          focusItem={focusItem?.pane === p.key && focusItem.chatId === p.chatId ? focusItem : undefined}
+          showSubagent={p.subagent?.chatId === p.chatId ? p.subagent : undefined}
+          active={!covered && !covering && !previewCovers && (!split || isActive)}
+          split={split}
+          screenshots={desk}
+          referenceDesk={referenceDesk}
+          onTextGenerationSettings={openTextGeneration}
+          screenshotWiring={screenshots}
+          screenshotKeys={screenshotShortcut ? shortcutLabel(screenshotShortcut) : undefined}
+          voice={voice}
+          catalog={catalog}
+          sticky={sticky}
+          favorites={modelFavorites}
+          projects={projects}
+          contexts={contexts}
+          autoSend={startWith?.pane === p.key ? startWith.n : undefined}
+          onAutoSent={() => setStartWith(undefined)}
+          projectNames={listed ? projectNames(chat.id) : shownProject ? [shownProject.name] : undefined}
+          snoozedUntil={snoozedNow(chat.id)}
+          shownProject={shownProject && { name: shownProject.name, defaults: proj.defaults[shownProject.id], has: !!listed && !!proj.chats[shownProject.id]?.includes(chat.id) }}
+          where={where}
+          server={serverBadge}
+          connectionName={hereLabel}
+          repoApi={repoApi}
+          scope={scope}
+          worktree={p.worktree?.scope === scope ? p.worktree : undefined}
+          onDropWorktree={() => patchPane(p.key, { worktree: undefined })}
+          onOpenWorktree={(w) => openRepository({ target: w.target, path: w.path, view: "worktrees" })}
+          onStarting={() => {
+            // A chat the owner starts here is one they opened, so it wins over an open still on its way (`navGen`),
+            // from the moment they send, before Hermes has made it.
+            if (activeKeyRef.current === p.key) navGen.current++;
+          }}
+          onStarted={(id) => {
+            // The chat started from this pane's New chat pane replaces it here, without taking the owner from the
+            // other pane if they went there meanwhile.
+            if (panesRef.current.find((now) => now.key === p.key)?.view !== p.view) return;
+            const stillActive = activeKeyRef.current === p.key;
+            patchPane(p.key, { chatId: id, picked: undefined, worktree: undefined });
+            setCompare((c) => c?.map((s) => (s.pane === p.key ? { ...s, chatId: id } : s)) as Compare | undefined);
+            setReopening(undefined);
+            if (stillActive) rememberChat(id);
+          }}
+          onChatGone={chatGone}
+          onDraftError={(reason) => {
+            if (panesRef.current.find((now) => now.key === p.key)?.view === p.view) patchPane(p.key, { draftError: reason });
+          }}
+          onToast={(text) => setToast({ text, at: Date.now() })}
+          delivers={delivers}
+          compare={
+            side &&
+            partner && {
+              partner: () => delivers.get(partner.pane)?.current,
+              startModel: side.model,
+              refuse: compareBusy ? "Compare sends to both chats, so it waits until both replies have ended. Nothing was sent." : undefined,
+              onStop: () => setCompare(undefined),
+              track: trackCompareSend,
+            }
+          }
+          onCompare={comparing ? undefined : (pick) => startCompare(p.key, pick)}
+          onMemorySettings={
+            hermes.memory
+              ? () => {
+                  setProjectOpen(false);
+                  setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+                  setRepoOpen(false);
+                  setUsageOpen(false); setWorkOpen(false);
+                  setShowTextGeneration(undefined);
+                  setShowDiagnostics(undefined);
+                  setShowVoice(undefined);
+                  setShowMemory({});
+                  setSettingsOpen(true);
+                }
+              : undefined
+          }
+          pin={{ pinned: pins[chat.id] !== undefined, onPin: (on) => pinChat(chat.id, on) }}
+          onSettle={(s) => setSettled(chat.id, s)}
+          onExport={(text) => setToast({ text, at: Date.now() })}
+          onSnapshotSettings={openSnapshotSettings}
+          onCopyLink={() => copyChatLink(chat)}
+          onArchive={(a) => setArchived(chat.id, a)}
+          onNew={() => newChat()}
+          onDelete={() => deleteChat(chat.id)}
+          onOpenChat={(id) => openChat(id, { pane: p.key })}
+          onOpenJob={openJobAt}
+          onOpenTurn={(id, turn) => {
+            if (!chats.some((c) => c.id === id)) return setToast({ text: "That chat isn't in the chat list now.", at: Date.now() });
+            guard(() => {
+              openChat(id, { pane: p.key, keepSettings: true });
+              patchPane(p.key, { jump: { turn, at: Date.now() } });
+            });
+          }}
+          onShowAt={(link) => {
+            if (!chats.some((c) => c.id === link.parentId)) return setToast({ text: "That chat isn't in the chat list now.", at: Date.now() });
+            // Opened at the message's stored row, the one the branch ends with, whatever its words.
+            guard(() => {
+              // Already guarded here; Settings can't be open over a pane the owner clicks in.
+              openChat(link.parentId, { pane: p.key, keepSettings: true });
+              if (link.point.rowId !== undefined) patchPane(p.key, { jump: { rowId: link.point.rowId, at: Date.now() } });
+            });
+          }}
+          previewControls={
+            <button className={`icon-btn ${previewShown ? "on" : ""}`} title={!panelOpen ? "Open the side panel" : previewShown ? "Close the side panel" : "Show the side panel"} aria-pressed={previewShown}
+              onClick={() => (!panelOpen ? openPanel(panelTab) : previewShown ? setPanelOpen(false) : setPanelHidden(false))}>
+              <PanelRight size={16} />
+            </button>
+          }
+        />,
+        // Splitting is its shortcut (Settings → Keyboard Shortcuts), a tab's menu, or dragging a tab to an edge (ADR 0116); a split pane keeps its Close.
+        split && (
+          <button className="icon-btn" title={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane${isActive ? "" : ` (${chordLabel(keys.toggleSplit[0])})`}`} aria-label={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane`} onClick={() => closePane(p.key)}>
+            <X size={16} />
+          </button>
+        )
+      ),
+    };
+  });
+
+  // Settings → Profiles (ADR 0156), and the Bots view's New bot, which is its New profile form (ADR 0164).
+  const profilesWiring: Omit<ProfilesWiring, "showTab"> = {
+    api: hermes.manageProfiles,
+    clone: hermes.profileClone,
+    capabilities: hermes.capabilities,
+    inUse: profile,
+    connected: status === "connected",
+    unread: (name) => others.byName[name]?.unread,
+    catalog: () => hermes.modelSettings.providers(),
+    busy: (name) => {
+      if (name === profile) {
+        const running = chats.find((c) => c.running);
+        if (running) return { kind: "reply", title: running.title };
+        const queues = hermes.getSnapshot().queues;
+        return Object.values(queues).some((q) => !q.paused && q.items.length) ? { kind: "queue" } : undefined;
+      }
+      const working = live?.sessions.find((s) => s.profile === name && s.status === "working");
+      return working ? { kind: "reply", title: working.title } : undefined;
+    },
+    lostMessages: (name) => hermes.heldMessagesIn(name),
+    jobCount: (name) => hermes.cron.list(name).then((jobs) => jobs.length, () => undefined),
+    leaving: leavingNote(profile, chats, words.profiles.leaving),
+    switchTo: switchFromProfiles,
+    local: {
+      pending: () => renamePending(connection),
+      note: (from, to) => noteRename(connection, from, to),
+      clear: () => clearRename(connection),
+      renamed: async (from, to) => {
+        // This run's chat on screen moves with the profile, as this computer's data does.
+        const fromPref = prefScope(connection, from);
+        if (shown?.has(fromPref)) {
+          shown.set(prefScope(connection, to), shown.get(fromPref) ?? null);
+          shown.delete(fromPref);
+        }
+        try {
+          await renameProfileLocally(connection, from, to, profileStores());
+        } finally {
+          // The inbox's dismissals were rewritten under the new name: it reads them again.
+          acks.reload();
+          // The profile in use keeps its chats on screen under its new name, as a switch would show them.
+          if (hermes.profile === from) void hermes.switchProfile(to);
+        }
+      },
+      deleted: async (name) => {
+        try {
+          await forgetProfileLocally(connection, name, profileStores());
+        } finally {
+          acks.reload();
+          await syncScreenshotOutbox().catch(() => {});
+        }
+      },
+    },
+    copyText: (text) => (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject(new Error("No clipboard"))),
+  };
+
+  return (
+    <LinksProvider preview={openPreview} path={openPath} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
+    <div className="app" inert={covered || restarting}>
+      <Rail
+        status={status}
+        route={route}
+        connectionName={connection.name}
+        unsecure={unsecure}
+        closedReason={closedReason}
+        onReconnect={() => void hermes.reconnect()}
+        onToggleList={() => setListOpen((o) => !o)}
+        onNew={() => newChat()}
+        onSearch={() => openSearch()}
+        // Hidden for a Hermes without Bot Mode, once the view that found out has closed.
+        onBots={
+          caps.caps.botMode.state === "unsupported" && !botsOpen
+            ? undefined
+            : () => {
+                setInboxOpen(false);
+                setOfficeOpen(false);
+                setBotsOpen((o) => !o);
+              }
+        }
+        botsOpen={botsOpen}
+        botsNeedYou={botsNeedYou}
+        onOffice={
+          agentOffice === "off"
+            ? undefined
+            : () => {
+                setInboxOpen(false);
+                setBotsOpen(false);
+                // Over Settings, it opens in Settings' place, as the rail's other screens do; otherwise it toggles.
+                if (settingsOpen)
+                  guard(() => {
+                    setSettingsOpen(false);
+                    setOfficeOpen(true);
+                  });
+                else setOfficeOpen((o) => !o);
+              }
+        }
+        officeOpen={officeShown && !settingsOpen}
+        onSettings={openSettings}
+        settingsOpen={settingsOpen}
+        onJobs={() =>
+          guard(() => {
+            setProjectOpen(false);
+            setSettingsOpen(false);
+            setUsageOpen(false); setWorkOpen(false);
+            setRepoOpen(false);
+            setAutomationsOpen(false);
+            setJobsAt(undefined);
+            setJobsOpen(true);
+          })
+        }
+        jobsOpen={jobsOpen && !settingsOpen}
+        onAutomations={() =>
+          guard(() => {
+            setProjectOpen(false);
+            setSettingsOpen(false);
+            setUsageOpen(false); setWorkOpen(false);
+            setRepoOpen(false);
+            setJobsOpen(false);
+            setOfficeOpen(false);
+            setAutomationsOpen(true);
+          })
+        }
+        automationsOpen={automationsOpen && !settingsOpen}
+        onRepo={() =>
+          guard(() => {
+            setProjectOpen(false);
+            setSettingsOpen(false);
+            setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+            setUsageOpen(false); setWorkOpen(false);
+            setRepoAt(undefined);
+            setRepoOpen((o) => !o);
+          })
+        }
+        repoOpen={repoOpen && !settingsOpen && !projectScreenOpen}
+        onUsage={() =>
+          guard(() => {
+            setProjectOpen(false);
+            setSettingsOpen(false);
+            setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+            setRepoOpen(false);
+            setWorkOpen(false);
+            setUsageOpen((o) => !o);
+          })
+        }
+        usageOpen={usageOpen && !settingsOpen && !projectScreenOpen && !jobsOpen && !automationsOpen}
+        // Hidden for a Hermes without the kanban plugin, once the page that found out has closed.
+        onWork={
+          caps.caps.kanban.state === "unsupported" && !workOpen
+            ? undefined
+            : () =>
+                guard(() => {
+                  setProjectOpen(false);
+                  setSettingsOpen(false);
+                  setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+                  setRepoOpen(false);
+                  setUsageOpen(false);
+                  setWorkOpen((o) => !o);
+                })
+        }
+        workOpen={workOpen && !settingsOpen && !projectScreenOpen && !jobsOpen && !automationsOpen && !officeVisible}
+        updateWaiting={updateWaiting}
+        connectionsMenu={
+          onSwitchConnection && (
+            <RailConnections
+              connections={saved}
+              currentId={connection.id}
+              live={servers}
+              onSwitch={switchConnection}
+              onAdd={() => onAddConnection?.()}
+              onManage={openConnections}
+            />
+          )
+        }
+      />
+      {/* Settings brings its own list of pages in this column (ADR 0160); the chat list stays mounted, hidden, so its
+          scroll and open sections are as they were on the way back. */}
+      {listOpen && (
+        <div className="list-slot" hidden={settingsOpen}>
+        <ChatList
+          defaultName={defaultProfileName}
+          profile={profile}
+          bots={
+            botsInList &&
+            (bots ? (
+              <BotList
+                bots={bots.roster}
+                pictures={botPictures}
+                activity={activityOf}
+                profile={profile}
+                current={profile}
+                leaving={leavingNote(profile, chats, words.profiles.leaving)}
+                onOpen={(b) => openBot(b, "open")}
+                onNewChat={(b) => openBot(b, "new")}
+              />
+            ) : (
+              <div className="empty-hint">{words.bots.reading}</div>
+            ))
+          }
+            projectSwitcher={
+              <ProjectSwitcher
+                projects={listable}
+                selected={shownProject}
+                unread={projectUnread}
+                loading={proj.loading}
+                error={proj.error}
+                unsupported={caps.caps.projects.state === "unsupported" ? { onGuide: () => openGuide(guideUrl("projects")) } : undefined}
+                connected={status === "connected"}
+                onOpen={() => status === "connected" && void projects.load()}
+                onSelect={(id) => {
+                  projects.select(id);
+                  if (!id) setProjectOpen(false);
+                }}
+                onCreate={async (name) => {
+                  await projects.create(name);
+                  guard(() => {
+                    setSettingsOpen(false);
+                    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+                    setRepoOpen(false);
+                    setUsageOpen(false); setWorkOpen(false);
+                    setProjectOpen(true);
+                  });
+                }}
+                onManage={() =>
+                  guard(() => {
+                    setSettingsOpen(false);
+                    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+                    setRepoOpen(false);
+                    setUsageOpen(false); setWorkOpen(false);
+                    setProjectOpen(true);
+                    void projects.readDefaults();
+                  })
+                }
+                attention={
+                  !membershipNeedsOwner(proj.membership)
+                    ? undefined
+                    : proj.membership.state === "preview"
+                      ? "Hermes can keep which chats are in each project"
+                      : "A project change conflicts with another computer's"
+                }
+                onReview={() => setMembershipOpen(true)}
+              />
+            }
+            savedFilters={
+              <SavedFilters filters={tagSnap.filters} onOpen={(f) => openSearch(f)} onDelete={(id) => tagChange(() => tagsStore.deleteFilter(id))} />
+            }
+            tagsOf={(chatId) => ({
+              list: tagSnap.tags,
+              of: tagSnap.chats[chatId] ?? [],
+              onToggle: (id, on) => tagChange(() => tagsStore.setTag([chatId], id, on)),
+              onManage: () => openTags(document.querySelector<HTMLElement>(`.row-open[data-chat="${CSS.escape(chatId)}"]`)),
+            })}
+            projectsOf={(chatId) => {
+              if (!listable.length) return undefined;
+              const of = projects.projectsOf(chatId);
+              const waiting = new Set(proj.membership.pending.filter((o) => o.chatId === chatId).map((o) => o.projectId));
+              return { list: listable, of, waiting, onToggle: (id, on) => setInProject(chatId, listable.find((p) => p.id === id)!, on) };
+            }}
+          switching={switching}
+          status={status}
+          others={others}
+          checkTimes={hermes.checkTimes}
+          chats={listed}
+          syncError={syncError}
+          selectedId={covering ? null : active.chatId}
+          alsoShownId={covering ? null : (other?.chatId ?? null)}
+          split={split}
+          onOpen={(id) => openChat(id)}
+          onOpenIn={openIn}
+          onOpenTab={(id) => openChat(id, { newTab: true })}
+          onSettle={setSettled}
+          onSettleAll={settleAll}
+          snoozes={snoozes}
+          attentionSince={attention.since}
+          pins={pins}
+          onPin={pinChat}
+          handoffs={handoffMap}
+          onStopWaiting={stopWaiting}
+          onSnooze={(id, until) => snoozeChat(id, until)}
+          onWake={(id) => snoozeChat(id, undefined)}
+          onArchive={setArchived}
+          onDelete={deleteChat}
+          onRename={(id, title, from) => hermes.rename(id, title, from)}
+          onRegenTitle={(id) => hermes.regenerateTitle(id)}
+          onCopyLink={copyChatLink}
+          onTextGenerationSettings={openTextGeneration}
+          onListProfiles={() => hermes.profiles()}
+          onCheckOthers={() => void hermes.checkOtherProfiles()}
+          onSwitchProfile={switchProfile}
+          onRetrySwitch={() => void (status === "connected" ? hermes.sync() : hermes.reconnect())}
+          profileClone={hermes.profileClone}
+          onNew={() => newChat()}
+          onSearch={() => openSearch()}
+          onHide={() => setListOpen(false)}
+        />
+        </div>
+      )}
+      {botsOpen && (
+        <Bots
+          server={where ?? "the server"}
+          profile={profile}
+          connected={status === "connected"}
+          last={bots}
+          pictures={botPictures}
+          load={loadBots}
+          activity={activityOf}
+          leaving={leavingNote(profile, chats, words.profiles.leaving)}
+          onOpen={(b) => openBot(b, "open")}
+          onNewChat={(b) => openBot(b, "new")}
+          onRefresh={() => void hermes.checkOtherProfiles()}
+          onClose={() => setBotsOpen(false)}
+          profiles={profilesWiring}
+          botEdit={botEdit}
+          onProfileSettings={openProfileSettings}
+        />
+      )}
+      {inboxOpen && (
+        <Inbox
+          entries={elsewhere.length ? [...inboxShown, ...elsewhere] : inboxShown}
+          unmatched={inbox.unmatched}
+          server={where ?? "the server"}
+          profile={profile}
+          connected={status === "connected"}
+          others={others}
+          live={live}
+          checkTimes={hermes.checkTimes}
+          leaving={leavingNote(profile, chats)}
+          onOpen={(e) => (e.server ? (setInboxOpen(false), guard(() => onOpenElsewhere?.(e))) : openEntry(e))}
+          approvalOf={approvalOf}
+          onAnswer={(e, choice, confirmed) => e.itemId && void hermes.answerApproval(e.chatId, e.itemId, choice, confirmed)}
+          onDismiss={(e) => (e.server ? onDismissElsewhere?.([e]) : acks.dismiss(e, inbox.entries))}
+          onClearDone={(es) => {
+            acks.dismissAll(
+              es.filter((e) => !e.server),
+              inbox.entries,
+            );
+            onDismissElsewhere?.(es.filter((e) => e.server));
+          }}
+          onRefresh={() => void hermes.checkOtherProfiles()}
+          onClose={() => setInboxOpen(false)}
+          onGuide={() => openGuide(guideUrl("liveSessions"))}
+        />
+      )}
+      <main className="main" ref={mainRef}>
+        <div className="main-chat" inert={previewCovers || undefined}>
+            {officeVisible && !settingsOpen ? (
+              <Office
+                rooms={officeRooms({ entries: inbox.entries, shown: (e) => !acks.isDismissed(e, dismissed), chats, profile, connected: status === "connected" })}
+                floorMemory={officeFloorMemory}
+                view={agentOffice}
+                onView={(view) => setUIPrefs({ agentOffice: view })}
+                server={where ?? "the server"}
+                profile={profile}
+                profiles={Object.keys(others.byName)}
+                connected={status === "connected"}
+                leaving={leavingNote(profile, chats)}
+                onOpen={openDesk}
+                onClose={() => {
+                  flushSync(() => setOfficeOpen(false));
+                  focusPane(active.key);
+                }}
+              />
+            ) : automationsOpen && !settingsOpen ? (
+              <CapabilityGate
+                store={hermes.capabilities}
+                id="automations"
+                openGuide={openGuide}
+                onDiagnostics={openDiagnostics}
+                onClose={() => { flushSync(() => setAutomationsOpen(false)); focusPane(active.key); }}
+              >
+                <Automations
+                  key={profile}
+                  api={hermes.automations}
+                  profile={profile}
+                  connected={status === "connected"}
+                  onClose={() => { flushSync(() => setAutomationsOpen(false)); focusPane(active.key); }}
+                  onOpenChat={(id) => openChat(id)}
+                />
+              </CapabilityGate>
+            ) : jobsOpen && !settingsOpen ? (
+              <CapabilityGate
+                store={hermes.capabilities}
+                id="scheduledJobs"
+                openGuide={openGuide}
+                onDiagnostics={openDiagnostics}
+                onClose={() => { flushSync(() => setJobsOpen(false)); focusPane(active.key); }}
+              >
+                <ScheduledJobs
+                  key={`${profile}:${jobsAt?.n ?? 0}`}
+                  api={hermes.cron}
+                  profile={profile}
+                  connected={status === "connected"}
+                  onClose={() => { flushSync(() => setJobsOpen(false)); focusPane(active.key); }}
+                  openJob={jobsAt?.id}
+                  troubleshoot={{
+                    store: troubleshoots,
+                    scope,
+                    start: (job, text) => startTroubleshoot(hermes, troubleshoots, scope, profile, job, text, (id) => openChat(id)),
+                    openChat: (id) => openChat(id),
+                  }}
+                  onOpenRun={(run, job) =>
+                    run.sessionId && pick({ chatId: run.sessionId, source: "cron", title: jobRunTitle(run.startedAt, job.name), settled: true, updatedAt: run.endedAt ?? run.startedAt, snippet: [] })
+                  }
+                />
+              </CapabilityGate>
+            ) : projectScreenOpen && shownProject && !settingsOpen ? (
+              <ProjectScreen
+                key={shownProject.id}
+                project={shownProject}
+                profile={profile}
+                connection={where}
+                connected={status === "connected"}
+                chats={listed.map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, unread: !!c.unread && !c.archived }))}
+                unlisted={(proj.chats[shownProject.id]?.length ?? 0) - listed.length}
+                draft={newChatDraft}
+                onDraft={(text) => savedDrafts.set(newChatDraftKey, text)}
+                onStartChat={() =>
+                  guard(() => {
+                    openChat(null, { fresh: true, keepSettings: true });
+                    setStartWith({ pane: active.key, n: Date.now() });
+                  })
+                }
+                onOpenChat={(id) => openChat(id)}
+                context={
+                  <ContextCard
+                    files={hermes.contextFiles}
+                    remote={hermes.files}
+                    profile={profile}
+                    project={shownProject}
+                    connection={where}
+                    connected={status === "connected"}
+                    model={{
+                      name: proj.defaults[shownProject.id]?.model && shortName(proj.defaults[shownProject.id].model!.model),
+                      window: knownWindow(chats, proj.defaults[shownProject.id]?.model),
+                    }}
+                    onAddFolder={(path) => projects.addFolder(shownProject.id, path)}
+                  />
+                }
+                onRename={(name) => projects.rename(shownProject.id, name)}
+                onDelete={async () => {
+                  const { name } = shownProject;
+                  await projects.delete(shownProject.id);
+                  setProjectOpen(false);
+                  if (stillIn(profile)) setToast({ text: `Deleted the project ${name}. Its chats and folders are kept.`, at: Date.now() });
+                }}
+                onAddFolder={(path) => projects.addFolder(shownProject.id, path)}
+                onRemoveFolder={(path) => projects.removeFolder(shownProject.id, path)}
+                readFolder={async (path) => {
+                  const [problem, worktrees] = await Promise.all([
+                    hermes.projects.checkFolder(profile, path).then(
+                      () => undefined,
+                      (e) => errorText(e),
+                    ),
+                    hermes.projects.worktrees(path).catch(() => []),
+                  ]);
+                  return { problem, worktrees };
+                }}
+                onClose={() => { flushSync(() => setProjectOpen(false)); focusPane(active.key); }}
+                membership={
+                  <MembershipStatus
+                    membership={proj.membership}
+                    connected={status === "connected"}
+                    onSync={() => void projects.syncNow()}
+                    onReview={() => setMembershipOpen(true)}
+                  />
+                }
+                defaults={{
+                  saved: proj.defaults[shownProject.id],
+                  catalog,
+                  profilePick: catalog?.defaultPick,
+                  profileEffort: catalog?.defaultEffort,
+                  favorites: modelFavorites,
+                  onToggleFavorite: toggleModelFavorite,
+                  onSave: async (base, draft) => {
+                    // Checked now when it can be; every chat start checks it again.
+                    if (draft.folder && status === "connected") await hermes.projects.checkFolder(profile, draft.folder);
+                    return projects.saveDefaults(shownProject.id, base, draft);
+                  },
+                  writer:
+                    status === "connected"
+                      ? {
+                          ask: (c, m) => hermes.askForEdit({ profile, ...c, task: m.task, words: unavailableWords(m) }).then((r) => r.text),
+                          model: () => hermes.modelSettings.instructionsModel(),
+                        }
+                      : undefined,
+                }}
+              />
+            ) : settingsOpen ? (
+          <SettingsScreen
+            status={status}
+            route={route}
+            unsecure={unsecure}
+            username={connection.username}
+            signsInWith={connection.method}
+            passwordSaved={kept.password}
+            headersSaved={kept.headers}
+            headers={route?.kind === "url" ? headers : []}
+            profile={profile}
+            olderPulled={olderPulled}
+            cacheBytes={() => hermes.cacheBytes()}
+            appearance={appearance}
+            listFonts={systemFonts}
+            modelSettings={hermes.modelSettings}
+            toolsets={hermes.toolsets}
+            mcp={hermes.mcp}
+            gateways={hermes.gateways}
+            providers={hermes}
+            accounts={hermes.accounts}
+            openUrl={(url) => webPages.openInBrowser(url).then(() => undefined)}
+            runningReplies={chats.filter((c) => c.running).length}
+            openChat={(() => {
+              const c = chats.find((x) => x.id === active.chatId);
+              return c && { id: c.id, title: c.title, runtimeId: c.runtimeId, running: c.running };
+            })()}
+            memory={hermes.memory}
+            memoryProviders={hermes.memoryProviders}
+            onMemoryDirty={onMemoryDirty}
+            memoryDiscards={memoryDiscards}
+            skills={hermes.skills}
+            extensions={{ skills: () => hermes.skillCommands() }}
+            onSkillDirty={onSkillDirty}
+            skillDiscards={skillDiscards}
+            checkScreenshots={screenshots.support}
+            tray={tray}
+            snapshots={tauriSnapshots}
+            showSnapshots={showSnapshots}
+            voiceSetup={voice.setup}
+            voiceSettings={hermes.voiceSettings}
+            onVoiceChange={voice.onChange}
+            showVoice={showVoice}
+            localStt={localStt}
+            transcribe={(audio, mime, side, signal) => localStt.transcribe({ audio, mime, profile: hermes.profile, connection: hermes.connectionId, side, signal })}
+            showTextGeneration={showTextGeneration}
+            showMemory={showMemory}
+            capabilities={hermes.capabilities}
+            openGuide={openGuide}
+            showDiagnostics={showDiagnostics}
+            showProfile={showProfile}
+            screen={hermes.screen}
+            toolProgress={() => hermes.toolProgress()}
+            work={hermes.kanban}
+            logs={logs}
+            onClearCache={() => hermes.clearCache()}
+            importer={{
+              imports: hermes.imports,
+              profile,
+              scope,
+              projects: proj.projects,
+              shownProject: proj.selectedId,
+              // The project store is the one for the profile the chats went to, even if the owner switched since.
+              onImported: (to, imported, projectId) => {
+                hermes.revealImported(to, imported);
+                if (projectId) for (const c of imported) projects.setChat(projectId, c.id, true);
+              },
+              onOpen: (id) => openChat(id),
+            }}
+            backup={{
+              env: backupEnv,
+              connection: connOf(connection),
+              profiles: listProfiles,
+              profile,
+              busy: restoreBusy,
+              reload: () => location.reload(),
+            }}
+            onPullOlder={() => hermes.pullOlderHistory()}
+            onSignOut={() =>
+              new Promise<void>((done) =>
+                guard(
+                  () => {
+                    // Nothing an artifact held is kept for another sign-in.
+                    artifacts.clear();
+                    void onSignOut().finally(done);
+                  },
+                  "signout",
+                  done,
+                ),
+              )
+            }
+            onSetUp={onSetUp && (() => guard(onSetUp))}
+            connectionManager={connectionManager}
+            onClose={() =>
+              guard(() => {
+                flushSync(() => setSettingsOpen(false));
+                focusPane(active.key);
+              })
+            }
+            persona={persona}
+            onPersonaDirty={onPersonaDirty}
+            guard={guard}
+            listProfiles={listProfiles}
+            defaultName={defaultProfileName}
+            profilesTab={profilesWiring}
+          />
+        ) : workOpen ? (
+          <Work
+            api={hermes.kanban}
+            connected={status === "connected"}
+            lacks={workLacks}
+            onClose={() => {
+              flushSync(() => setWorkOpen(false));
+              focusPane(active.key);
+            }}
+          />
+        ) : usageOpen ? (
+          <UsageAnalytics
+            key={profile}
+            budgets={budgets}
+            tab={usageTab}
+            onTab={setUsageTab}
+            io={usageIo}
+            profile={profile}
+            listProfiles={listProfiles}
+            projects={proj.projects}
+            projectChats={proj.chats}
+            connected={status === "connected"}
+            onOpenChat={(c) =>
+              pick({ chatId: c.id, title: c.title, source: toSource(c.source), settled: !c.pinned, archived: c.archived || undefined, updatedAt: c.startedAt, snippet: [] })
+            }
+            saveCsv={(csv, fileName) => invoke<string | null>("usage_export", { csv, fileName })}
+            onClose={() => {
+              flushSync(() => setUsageOpen(false));
+              focusPane(active.key);
+            }}
+          />
+        ) : repoOpen ? (
+          <RepositoryScreen
+            key={repoAt ? `at-${repoAt.n}` : "repo"}
+            api={repoApi}
+            initialTarget={repoAt?.target ?? repoTarget(sshAddressOf(connection), localStorage.getItem(REPO_TARGET_KEY), localStorage.getItem(terminalTargetKey(connection)))}
+            initialPath={repoAt?.path ?? localStorage.getItem(REPO_PATH_KEY) ?? ""}
+            initialView={repoAt?.view}
+            worktrees={{
+              profile,
+              connection: hereLabel,
+              chatTitle: (id) => hermes.getSnapshot().chats.find((c) => c.id === id)?.title,
+              hermesChatsIn: status === "connected" ? (path) => hermes.chatsWorkingIn(path) : undefined,
+              onStartChat:
+                status === "connected"
+                  ? (w) => {
+                      flushSync(() => setRepoOpen(false));
+                      openChat(null, { fresh: true, worktree: { ...w, scope } });
+                    }
+                  : undefined,
+            }}
+            recent={readRecent(localStorage.getItem(REPO_RECENT_KEY))}
+            suggestions={(shownProject?.folders ?? []).map((f) => ({ label: shownProject!.name, path: f.path }))}
+            onOpened={rememberRepo}
+            onTarget={(t) => rememberChoice(REPO_TARGET_KEY, t)}
+            suggest={
+              status === "connected"
+                ? (instructions, input) => hermes.askForEdit({ profile, instructions, input, maxTokens: 400 }).then((r) => r.text)
+                : undefined
+            }
+            suggestScope={scope}
+            openUrl={(url) => void webPages.openInBrowser(url).catch(() => undefined)}
+            onClose={() => {
+              flushSync(() => setRepoOpen(false));
+              focusPane(active.key);
+            }}
+          />
+        ) : null}
+        <Split panes={slots} dir={splitDir} activeKey={active.key} onActivate={activate} covered={covered || covering || previewCovers || windowHidden} />
+        </div>
+          {panelMounted && (
+            <SidePanel
+              tab={panelTab}
+              onTab={setPanelTab}
+              shown={previewShown}
+              overlay={!previewFits}
+              compact={(previewFits ? paneWidth : mainWidth || Infinity) < PANEL_COMPACT_WIDTH}
+              width={paneWidth}
+              maxWidth={paneMax}
+              onResize={(w, done) => {
+                setDragWidth(done ? null : w);
+                if (done) setUIPrefs({ previewWidth: w });
+              }}
+              onHide={() => setPanelHidden(true)}
+              onClose={() => setPanelOpen(false)}
+              running={{ terminal: terminalRunning, screen: screenHeld && "(you're in control)" }}
+              tabs={{
+                // A page or file runs only while it is on screen: a hidden frame could keep playing or loading.
+                preview: (shown) =>
+                  shown && (
+                  <PreviewPane
+                    history={previewHistory}
+                    onStep={stepPreview}
+                    serverLabel={serverBadge ? `${serverBadge}, ${serverLabel(route)}` : serverLabel(route)}
+                    readServer={(path, host, session) => (host ? hermes.readHostFile(path) : hermes.readServerFile(path, session))}
+                    local={localFiles}
+                    web={previewWeb}
+                    serverPages={previewServerPages}
+                    artifacts={artifacts}
+                    artifactScope={{ scope, profile, ...(active.chatId && { chatId: active.chatId }) }}
+                    connected={status === "connected"}
+                    desk={desk}
+                    fileChanges={{ chat: (id) => chats.find((c) => c.id === id), io: (id) => hermes.rollbackIO(id) }}
+                  />
+                  ),
+                terminal: (shown) => (
+                  <Suspense fallback={null}>
+                    <TerminalTab
+                      server={{
+                        api: tauriTerminal,
+                        initialTarget: terminalTarget(sshAddressOf(connection), localStorage.getItem(terminalTargetKey(connection))),
+                        guessed: terminalTargetGuessed(sshAddressOf(connection), localStorage.getItem(terminalTargetKey(connection))),
+                        onTarget: (t) => rememberChoice(terminalTargetKey(connection), t),
+                      }}
+                      local={{ api: tauriLocalTerminal }}
+                      shown={shown}
+                      shells={terminalShells.shells}
+                      onShow={terminalShells.show}
+                      onClose={terminalShells.close}
+                      onLocal={(id) => terminalShells.move(id, "local")}
+                      onRunning={setTermRunning}
+                    />
+                  </Suspense>
+                ),
+                // On a server without the managed-files routes, a note takes the browser's place (ADR 0044).
+                files: () => (
+                  <CapabilityGate store={hermes.capabilities} id="serverFiles" openGuide={openGuide} onDiagnostics={openDiagnostics}>
+                    <FileBrowser files={hermes.files} status={status} route={route} path={filesPath} onPath={setFilesPath} />
+                  </CapabilityGate>
+                ),
+                // A profile's screen is its own; switching profile starts the tab again.
+                screen: (shown) => {
+                  // Through the same SSH target as the server's Terminal.
+                  const target = terminalTarget(sshAddressOf(connection), localStorage.getItem(terminalTargetKey(connection)));
+                  return (
+                    <ScreenTab
+                      key={profile}
+                      api={hermes.screen}
+                      shown={shown}
+                      connected={status === "connected"}
+                      onHeld={setScreenHeld}
+                      system={target ? (password) => screenApps(target, password) : undefined}
+                    />
+                  );
+                },
+              }}
+            />
+          )}
+      </main>
+      {searchOpen && (
+        <SearchPalette
+          // A new profile gets a new palette: nothing found, previewed or picked in the old one carries over.
+          key={`${scope}\n${searchStart?.id ?? "search"}`}
+          profile={profile}
+          tags={tagSnap}
+          initial={searchStart?.filter}
+          initialName={searchStart?.name}
+          onRun={(f) => runFilter(f, hermes, { exists: tagsStore.exists, of: tagsStore.tagsOf })}
+          onPick={pick}
+          onClose={() => setSearchOpen(false)}
+          onSave={(name, f) => tagsStore.saveFilter(name, f)}
+          onBulk={(p) => tagsStore.applyBulk(p)}
+          onManageTags={() => openTags()}
+          passKey={(e) => pickApp(e) === "search" || (!!screenshotShortcut && shortcutOf(e.nativeEvent) === screenshotShortcut)}
+          everywhere={
+            everywhere && {
+              run: everywhere.run,
+              onPick: (row) =>
+                guard(
+                  () => {
+                    setSearchOpen(false);
+                    everywhere.open(row);
+                  },
+                  row.ref.connection !== connection.id ? "connection" : row.ref.profile !== profile ? "profile" : "leave",
+                ),
+            }
+          }
+        />
+      )}
+      {tagsOpen && <TagManager key={scope} store={tagsStore} profile={profile} returnTo={tagsReturn} onClose={() => setTagsOpen(false)} />}
+      {membershipOpen && (
+        <MembershipDialog
+          key={scope}
+          membership={proj.membership}
+          projects={proj.projects}
+          titleOf={(id) => chats.find((c) => c.id === id)?.title}
+          connected={status === "connected"}
+          onMigrate={() => projects.migrate()}
+          onLater={() => projects.postponeMigration()}
+          onKeepMine={(id) => projects.keepMine(id)}
+          onUseHermes={(id) => projects.useHermes(id)}
+          onClose={() => setMembershipOpen(false)}
+        />
+      )}
+      {linkView && <ChatLinkNotice view={linkView} onClose={closeLinkNotice} />}
+      {toast && (
+        <div className="toast" key={toast.at} role="status">
+          <span>{toast.text}</span>
+          {toast.undo && (
+            <button
+              onClick={() => {
+                toast.undo?.();
+                setToast(null);
+              }}
+            >
+              Undo
+            </button>
+          )}
+          {toast.action && (
+            <button
+              onClick={() => {
+                toast.action?.run();
+                setToast(null);
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
+        </div>
+      )}
+      {(leaving?.edit === "memory" || leaving?.edit === "skill") && (
+        <LeaveMemoryEdit
+          subject={leaving.edit}
+          profile={profile}
+          onStay={() => {
+            leaving.stay?.();
+            setLeaving(undefined);
+          }}
+          onDiscard={() => {
+            setLeaving(undefined);
+            if (leaving.edit === "memory") {
+              onMemoryDirty(false);
+              setMemoryDiscards((n) => n + 1);
+            } else {
+              onSkillDirty(false);
+              setSkillDiscards((n) => n + 1);
+            }
+            leaving.go();
+          }}
+        />
+      )}
+      {leaving?.edit === "artifact" && (leaving.what === "signout" || leaving.what === "close") && (
+        <LeaveArtifacts
+          names={artifacts.unsaved().map((a) => a.name)}
+          what={leaving.what}
+          onStay={() => {
+            leaving.stay?.();
+            setLeaving(undefined);
+          }}
+          onDiscard={() => {
+            setLeaving(undefined);
+            artifacts.clear();
+            leaving.go();
+          }}
+        />
+      )}
+      {leaving?.edit === "persona" && (
+        <LeavePersona
+          what={leaving.what}
+          profile={personaProfile ?? profile}
+          kept={personaKept}
+          onStay={() => {
+            leaving.stay?.();
+            setLeaving(undefined);
+          }}
+          onGo={() => {
+            setLeaving(undefined);
+            personaDirty.current = false;
+            leaving.go();
+          }}
+        />
+      )}
+      {connectionAsk && (
+        <SwitchConnection
+          from={connection}
+          to={connectionAsk.to}
+          notes={connectionAsk.notes}
+          onStay={() => { connectionAsk.stay?.(); setConnectionAsk(undefined); }}
+          onGo={() => {
+            const { go } = connectionAsk;
+            setConnectionAsk(undefined);
+            go();
+          }}
+        />
+      )}
+      {removeAsk && onRemoveConnection && (
+        <RemoveConnection
+          c={removeAsk}
+          inUse={removeAsk.id === connection.id}
+          notes={removeAsk.id === connection.id ? leavingConnection() : backgroundNotes(removeAsk.id)}
+          onCancel={() => setRemoveAsk(undefined)}
+          onRemove={async () => {
+            await onRemoveConnection(removeAsk);
+            setRemoveAsk(undefined);
+          }}
+        />
+      )}
+      {restarting &&
+        // Outside the inert app, so it is announced.
+        createPortal(
+          <div className="restarting-overlay" role="status">
+            Restarting into {update.to}…
+          </div>,
+          document.body,
+        )}
+    </div>
+    </LinksProvider>
+  );
+}
+
+/**
+ * One pane's chat: its transcript and composer, and the draft kept for it. `chatId` null is the New chat pane; sending
+ * there starts a chat (`onStarted`). `started`: the chat is in the list, so it can be settled, archived or exported.
+ * `paneKey` tells Hermes which pane has the chat on screen, so a chat shown in both stays read until both leave it.
+ */
+function ChatView({
+  openGuide,
+  hermes,
+  connection,
+  profile,
+  status,
+  paneKey,
+  chatId,
+  chat,
+  started,
+  picked,
+  jump,
+  focusItem,
+  showSubagent,
+  active,
+  split,
+  catalog,
+  sticky,
+  favorites,
+  projects,
+  contexts,
+  autoSend,
+  onAutoSent,
+  projectNames,
+  snoozedUntil,
+  shownProject,
+  where,
+  server,
+  connectionName,
+  repoApi,
+  scope,
+  worktree,
+  onDropWorktree,
+  onOpenWorktree,
+  onStarting,
+  onStarted,
+  onDraftError,
+  onChatGone,
+  onToast,
+  delivers,
+  compare,
+  onCompare,
+  onMemorySettings,
+  pin,
+  onSettle,
+  onExport,
+  onSnapshotSettings,
+  onCopyLink,
+  onArchive,
+  onNew,
+  onDelete,
+  onOpenChat,
+  onOpenJob,
+  onShowAt,
+  onOpenTurn,
+  previewControls,
+  screenshots,
+  screenshotWiring,
+  screenshotKeys,
+  voice,
+  referenceDesk,
+  onTextGenerationSettings,
+}: {
+  hermes: Hermes;
+  connection: SavedConnection;
+  profile: string;
+  status: ConnectionStatus;
+  paneKey: string;
+  chatId: string | null;
+  chat: Chat;
+  started: boolean;
+  picked?: { found: Found; at: number };
+  /** What to go to in the chat (ChatPane `JumpTarget`). */
+  jump?: JumpTarget;
+  /** The card or message an Inbox entry is about, which Main scrolls to and focuses once the chat shows it. */
+  focusItem?: { itemId?: string; approval: boolean };
+  /** A subagent to open in the chat's Subagents panel, from the agent office. */
+  showSubagent?: { id: SubagentId; at: number };
+  active: boolean;
+  split: boolean;
+  catalog?: ModelCatalog;
+  sticky?: ModelPick;
+  favorites: string[];
+  projects: ProjectsStore;
+  contexts: ChatContexts;
+  autoSend?: number;
+  onAutoSent: () => void;
+  projectNames?: string[];
+  /** When the chat wakes, if it is snoozed. */
+  snoozedUntil?: number;
+  /** The project the list shows, its defaults for new chats, and whether this chat is in it. */
+  shownProject?: { name: string; defaults?: ProjectDefaults; has: boolean };
+  /** The connection, as a folder on the server is shown beside it. */
+  where?: string;
+  /** The server and profile, in the chat's header while more than one connection is live (ADR 0125). */
+  server?: string;
+  /** The connection's name, as a worktree's record names who started a chat in it. */
+  connectionName: string;
+  repoApi: RepoApi;
+  /** The connection and profile, as this computer keys what it keeps for each. */
+  scope: string;
+  /** The worktree this New chat pane starts its chat in (ADR 0043). */
+  worktree?: WorktreeStart;
+  onDropWorktree: () => void;
+  /** Opens the Repository screen's Worktrees view on the worktree a chat works in. */
+  onOpenWorktree: (w: WorktreeChat) => void;
+  /** A send from the New chat pane is starting a chat, before Hermes has made it. */
+  onStarting: () => void;
+  onStarted: (id: string) => void;
+  onDraftError: (reason: string) => void;
+  /** A send found its chat out of the list: puts `typed` back where the owner will see it, and asks Hermes whether
+   * the chat is still there (#467). */
+  onChatGone: (id: string, typed: string) => void;
+  /** Where this pane keeps its `deliver`, by `paneKey`, for a compared pane to send through. */
+  delivers: Map<string, RefObject<Deliver>>;
+  /** One of two compared panes (ADR 0101): a send here goes to `partner` too. `startModel`: what this New chat pane starts on. */
+  compare?: Comparing & { partner: () => Deliver | undefined; startModel?: ModelPick; track: <T>(sending: Promise<T>) => Promise<T> };
+  /** Starts Compare from this pane with a second model, from the model picker. */
+  onCompare?: (pick: ModelPick) => void;
+  /** Opens a page of the compatibility guide in the owner's browser. */
+  openGuide: (url: string) => void;
+  onToast: (text: string) => void;
+  /** Opens Settings → Memory, when this Hermes can edit memory from here. */
+  onMemorySettings?: () => void;
+  pin: ChatPin;
+  onSettle: (settled: boolean) => void;
+  onExport: (notice: string) => void;
+  /** Opens Settings → Snapshots, from Share snapshot. */
+  onSnapshotSettings: () => void;
+  onCopyLink: () => void;
+  onArchive: (archived: boolean) => void;
+  onNew: () => void;
+  /** Deletes the chat once the owner has confirmed it; resolves with whether Hermes deleted it. */
+  onDelete: () => Promise<boolean>;
+  /** Opens another chat in this pane: a branch just made. */
+  onOpenChat: (id: string) => void;
+  onOpenJob: (jobId: string) => void;
+  /** Opens the chat a branch came from, at the message it was branched after. */
+  onShowAt: (link: BranchLink) => void;
+  /** Opens another version of a turn in this pane, at that turn (ADR 0035). */
+  onOpenTurn: (chatId: string, turn: number) => void;
+  previewControls: ReactNode;
+  screenshots: ScreenshotDesk;
+  screenshotWiring: Screenshots;
+  screenshotKeys?: string;
+  voice: VoiceApi;
+  /** The chats each unsent message references, by Draft key. */
+  referenceDesk: ReferenceDesk;
+  onTextGenerationSettings: () => void;
+}) {
+  // What the owner has typed and not sent, kept for each chat on this connection and profile. Two panes on one chat
+  // share its draft.
+  const draftOf = (id: string | null) => draftKey(connection, profile, id);
+  const shownDraft = draftOf(chatId);
+  const composerText = useSyncExternalStore(savedDrafts.subscribe, () => savedDrafts.get(shownDraft));
+  const stillIn = () => hermes.profile === profile;
+  const policy = policyOf(chat);
+  const sessionHere = started && policy.session === "live";
+
+  // A new chat takes each value from what the owner chose for it here, then the shown project's defaults, then the
+  // profile (projectDefaults.ts). A pick here also stays the composer's Model pick, as before.
+  const [chosen, setChosen] = useState<ModelPick>();
+  useEffect(() => setChosen(undefined), [chatId, profile]);
+  // No default for `project`: an explicit undefined is "no project", never the one this pane last drew.
+  const settingsFor = (project: { name: string; defaults?: ProjectDefaults } | undefined) =>
+    resolveNewChat({ chosen: chosen ?? compare?.startModel, chosenFolder: worktree?.path, project, sticky, profilePick: catalog?.defaultPick, profileEffort: catalog?.defaultEffort });
+  const startSettings = settingsFor(shownProject);
+  const [applying, setApplying] = useState(false);
+  useEffect(() => setApplying(false), [chatId]);
+
+  const shownModel = (started && chat.model) || startSettings.model.value;
+  // The worktree this chat was started in from this computer, if it was (ADR 0043).
+  const inWorktreeKey = useSyncExternalStore(worktreeChats.subscribe, () => JSON.stringify(started ? (worktreeChats.get(scope, chat.id) ?? null) : null));
+  const inWorktree = useMemo(() => JSON.parse(inWorktreeKey) as WorktreeChat | null, [inWorktreeKey]);
+  const pickModel = (pick: ModelPick) => {
+    setUIPrefs({ modelPicker: { ...pick, profile: prefScope(connection, profile) } });
+    if (!started) return setChosen(pick);
+    hermes.setModel(chat.id, pick).catch((e) => stillIn() && onToast(`Couldn't switch this chat's model: ${errorText(e)}`));
+  };
+
+  const findTarget =
+    picked?.found.chatId === chat.id && picked.found.find ? { query: picked.found.find, itemId: hermes.locate(picked.found), at: picked.at } : undefined;
+
+  /** The chat to send in: the one in this pane, or a new one started now for the New chat pane. */
+  const chatToSendIn = async (): Promise<{ id: string } | { delivery: Delivery }> => {
+    if (chatId) return { id: chatId };
+    onStarting();
+    // The project and its defaults as they are now, not as they were when the pane drew.
+    projects.reread();
+    const into = projects.getSnapshot().selectedId;
+    try {
+      const shown = projects.getSnapshot().projects.find((p) => p.id === into);
+      const defaults = shown && (await projects.freshDefaults().catch((e) => Promise.reject(new Error(`Couldn't read the project's defaults on this computer: ${errorText(e)}`))));
+      const s = settingsFor(shown && { name: shown.name, defaults: defaults?.[shown.id] });
+      const problem = modelProblem(s, catalog);
+      if (problem) throw new Error(problem);
+      // Hermes would run a chat in a folder it can't list, or quietly in its own; check it is there and allowed first.
+      if (s.folder.value) await hermes.projects.checkFolder(profile, s.folder.value);
+      const context = shown && (await contexts.start(shown.id));
+      const seed = { folder: s.folder.value, context: context?.blocks[0] };
+      // The owner may have switched profile, or another window the project shown, meanwhile: these were that one's.
+      if (!stillIn()) throw new Error(`The profile changed to ${hermes.profile} before the chat started. Nothing was sent.`);
+      projects.reread();
+      if (projects.getSnapshot().selectedId !== into) throw new Error("The project shown changed before the chat started. Nothing was sent.");
+      const instructions = s.instructions.value && instructionsMessage(s.project ?? "", s.instructions.value);
+      let id: string;
+      if (worktree) {
+        // Its place in the worktree is held on the server before Hermes starts it, so the worktree can't be removed
+        // meanwhile; the chat runs there only if Hermes says it took the folder (newChat). Each wait on the server is
+        // a chance for the owner to switch profile: the chat must start in the profile it was written in, or not at all.
+        const w = worktree;
+        const begin = () => {
+          if (!stillIn()) return Promise.reject(new Error(`The profile changed to ${hermes.profile} before the chat started. Nothing was sent.`));
+          return hermes.newChat(s.model.value, { ...seed, instructions });
+        };
+        const started = await startInWorktree(repoApi, w, { profile, connection: connectionName }, begin);
+        id = started.chatId;
+        const noted = worktreeChats.set(scope, id, { target: w.target, repo: w.repo, id: w.id, path: w.path, branch: w.branch, token: started.token });
+        if (!stillIn())
+          throw new Error(`The profile changed to ${hermes.profile} while the chat was starting in ${w.path}. It started empty in the ${profile} profile; your message wasn't sent.`);
+        if (!noted)
+          onToast(`The chat started, but this computer couldn't note that it works in ${w.path}: its storage is full or unavailable. The chat's header won't name the worktree; the Repository screen's Worktrees view still does.`);
+        if (started.warning) onToast(started.warning);
+      } else id = await hermes.newChat(s.model.value, { ...seed, instructions });
+      context?.accepted(id);
+      if (into && projects.getSnapshot().projects.some((p) => p.id === into)) projects.setChat(into, id, true);
+      if (stillIn()) onStarted(id);
+      return { id };
+    } catch (e) {
+      const reason = `Couldn't start a chat: ${errorText(e)}`;
+      if (stillIn()) onDraftError(reason);
+      return { delivery: { delivery: "unsent", reason } };
+    }
+  };
+
+  // A failed send stays in its chat's outbox. A failure to start a chat restores the New chat draft, unless the message
+  // was typed in the other compared pane: there it still is.
+  const deliver: Deliver = async (text, attachments, skill, mirrored, references) => {
+    // In no outbox until its chat exists: an update's restart meanwhile keeps it as the draft (unsaved.ts). A mirrored
+    // message is held with no text, so it doesn't go either, and is kept once, as the other pane's draft.
+    const typed = mirrored ? "" : savedDrafts.take(shownDraft);
+    const held: Sending = { key: shownDraft, text: typed };
+    sending.add(held);
+    const to = await chatToSendIn().finally(() => sending.delete(held));
+    if (held.captured) {
+      if (mirrored) return false;
+      // Saved as a draft for the restart, so it doesn't go. Should the restart fail, it is back in the composer.
+      const now = savedDrafts.get(held.key);
+      savedDrafts.set(held.key, now ? `${now}\n\n${typed}` : typed);
+      referenceDesk.putBack(held.key, references);
+      return false;
+    }
+    if ("delivery" in to) {
+      if (!mirrored) {
+        savedDrafts.putBack(draftOf(null), typed);
+        referenceDesk.putBack(draftOf(null), references);
+      }
+      return false;
+    }
+    const { delivery, itemId } = await hermes.sendTracked(to.id, text, attachments, skill, references);
+    // No item: the chat left the list before the message went in, so it is in no outbox. Its words go back to its Draft
+    // while a pane still shows it, and the chat is asked for: back in the list if Hermes still has it, else the Draft
+    // moves to New chat. Once its panes have given way, they go straight to New chat (#467).
+    if (itemId === undefined && delivery.delivery !== "accepted") {
+      // After a profile switch, the words stay with their own profile's chat.
+      if (!stillIn()) keepDraft(draftOf(to.id), mirrored ? "" : typed);
+      else onChatGone(to.id, mirrored ? "" : typed);
+      if (stillIn())
+        onDraftError(`Your message wasn't sent: ${delivery.reason} Its words are back in the composer${attachments.length ? "; attach again any of its files that aren't" : ""}.`);
+      return false;
+    }
+    return true;
+  };
+  const deliverRef = useRef(deliver);
+  deliverRef.current = deliver;
+  useLayoutEffect(() => {
+    delivers.set(paneKey, deliverRef);
+    return () => void (delivers.get(paneKey) === deliverRef && delivers.delete(paneKey));
+  }, [delivers, paneKey]);
+  // Screenshots are held and let go once for both compared chats: letting go after the first would delete a capture
+  // the second still uploads.
+  const send = async (text: string, attachments: Attachment[], skill?: SkillCall, references: SentReference[] = []) => {
+    const paths = attachments.map((a) => a.path);
+    screenshots.hold(paths);
+    const partner = compare?.partner();
+    const both = Promise.all([deliver(text, attachments, skill, false, references), partner?.(text, attachments, skill, true, references)]);
+    const [own, mirrored] = await (compare ? compare.track(both) : both);
+    if (!own && !mirrored) return screenshots.sent(shownDraft, attachments, false);
+    // The other chat's message holds the files now, and a screenshot goes once that message no longer needs it, so
+    // none can come back to this composer with the words.
+    if (!own) onToast("This pane's chat couldn't start, so your message went only to the other chat, with its files.");
+    try {
+      await screenshotWiring.syncOutbox?.();
+      screenshots.finish(paths);
+    } catch {
+      // Retain ownership until Rust protects the outbox, as in the single-pane send path.
+    }
+  };
+  useEffect(() => {
+    if (autoSend === undefined || chatId !== null) return;
+    onAutoSent();
+    const text = savedDrafts.get(shownDraft).trim();
+    if (text) void send(text, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- send once per auto-send request; `send` and `onAutoSent` are new functions each render and would send again on every render
+  }, [autoSend]);
+  // The chat's queue, shared by every pane showing it (ADR 0018). A chat not started yet has none.
+  const queue = useSyncExternalStore(hermes.subscribe, () => hermes.getSnapshot().queues[chat.id]);
+  const queueApi: QueueApi | undefined = sessionHere
+    ? {
+        add: (text, attachments) => {
+          const why = hermes.enqueue(chat.id, text, attachments);
+          if (why) return why;
+          // The queue keeps its screenshots now, until they go or the owner removes the message (chatCache.ts).
+          screenshots.hold(attachments.map((a) => a.path));
+          savedDrafts.take(shownDraft);
+          return undefined;
+        },
+        edit: (id, text) => hermes.editQueued(chat.id, id, text),
+        remove: (id) => hermes.removeQueued(chat.id, id),
+        moveTo: (id, index) => hermes.moveQueued(chat.id, id, index),
+        sendNow: (id) => hermes.sendQueuedNow(chat.id, id, commands.why(STEER)),
+        cantSteer: () => commands.why(STEER),
+        pause: () => hermes.pauseQueue(chat.id),
+        resume: () => hermes.resumeQueue(chat.id),
+        hold: () => hermes.holdQueue(chat.id),
+      }
+    : undefined;
+  const retry = (itemId: string) => void hermes.retry(chat.id, itemId);
+  const edit = (itemId: string) => {
+    const row = chat.items.find((i) => i.id === itemId);
+    if (row?.kind !== "user") return;
+    const typed = savedDrafts.get(shownDraft);
+    savedDrafts.set(shownDraft, typed ? `${typed}\n\n${row.text}` : row.text);
+    referenceDesk.putBack(shownDraft, row.outgoing?.references ?? []);
+    hermes.dismiss(chat.id, itemId);
+  };
+
+  const visible = usePaneVisible();
+
+  // Branch from here (ADR 0027): the message the preview is open for, if any.
+  const [branchFrom, setBranchFrom] = useState<string>();
+  useEffect(() => setBranchFrom(undefined), [chatId, profile]);
+  const link = useSyncExternalStore(hermes.subscribe, () => hermes.getSnapshot().branches.links[chat.id]);
+  // Edit and Regenerate (ADR 0035): the message the dialog is open for, and the versions of this chat's turns.
+  const [replayFrom, setReplayFrom] = useState<{ itemId: string; kind: ReplayKind }>();
+  useEffect(() => setReplayFrom(undefined), [chatId, profile]);
+  // The Run view (ADR 0178): the reply it is open for, if any.
+  const [runOf, setRunOf] = useState<string>();
+  useEffect(() => setRunOf(undefined), [chatId, profile]);
+  const links = useSyncExternalStore(hermes.subscribe, () => hermes.getSnapshot().branches.links);
+  const listedChats = useSyncExternalStore(hermes.subscribe, () => hermes.getSnapshot().chats);
+  const variants = useMemo(() => {
+    const byTurn = variantsIn(links, chat.id, (id) => listedChats.some((c) => c.id === id));
+    // Hermes keeps no model per reply: the original shows what its chat runs on now, when that's known here.
+    for (const versions of byTurn.values())
+      for (const v of versions) if (v.kind === "original") v.model = listedChats.find((c) => c.id === v.chatId)?.model;
+    return byTurn;
+  }, [links, listedChats, chat.id]);
+  const [finishing, setFinishing] = useState(false);
+  const parentListed = useSyncExternalStore(hermes.subscribe, () => !!link && hermes.getSnapshot().chats.some((c) => c.id === link.parentId));
+
+  // Slash commands (commands.ts). Each empties the Draft it was typed in only once it has run, only if the owner hasn't
+  // changed it meanwhile, and only while the composer it was typed in is still on the chat (`still`). An answer after
+  // that does nothing: its Draft stays as typed. One command at a time per Draft, so two panes on one chat can't run it
+  // twice.
+  const serverCommands = useServerCommands(hermes, status === "connected", profile);
+  const skillCommands = useSkillCommands(hermes, status === "connected", profile);
+  const caps = useCapabilities(hermes.capabilities);
+  // Standing missions (GoalBar.tsx, ADR 0187): the goal bar while the chat has a goal, and Set a goal.
+  const missions = caps.caps.standingMissions;
+  const goalApi: GoalApi = {
+    read: () => hermes.readGoal(chat.id),
+    budget: () => hermes.goalBudget(),
+    set: (draft, seen) => hermes.setGoal(chat.id, draft, seen),
+    act: (action) => hermes.controlGoal(chat.id, action),
+  };
+  const goalLive = sessionHere && status === "connected" && missions.state !== "unsupported" ? chat.runtimeId : undefined;
+  const control = useChatGoal(hermes.goals, chat.id, goalLive, goalApi.read);
+  const [settingGoal, setSettingGoal] = useState<{ outcome: string }>();
+  useEffect(() => setSettingGoal(undefined), [chatId, profile]);
+  const goalBlocked = status !== "connected" || !chat.runtimeId ? "Hermes isn't connected to this chat right now." : undefined;
+  const setGoalWhy = goalBlocked ?? hermes.goalRefusal(chat.id);
+  // Another of the profile's chats can be referenced; a Bot Chat is its bot's, and an archived one is out of sight.
+  const referable = useMemo(
+    () => listedChats.filter((c) => c.id !== chat.id && !c.archived && policyOf(c).listed && c.title.trim()).map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
+    [listedChats, chat.id],
+  );
+  const commands: CommandHost = {
+    references: { chats: referable, reference: (c) => referenceDesk.add(shownDraft, { chatId: c.id, title: c.title }) },
+    skills: status === "connected" ? skillCommands.skills : undefined,
+    refreshSkills: skillCommands.refresh,
+    guide: caps.caps.commands.state === "unsupported" ? () => openGuide(guideUrl("commands")) : undefined,
+    why: (def) => {
+      if (def.name === "help" || (def.name === "new" && !isBotChat(chat))) return undefined;
+      // In a Bot Chat, /new compacts it, which needs the chat open on Hermes and no reply running.
+      if (def.name === "new") {
+        if (status !== "connected") return "Not connected to Hermes.";
+        if (!chat.runtimeId) return "This chat is still loading from Hermes.";
+        if (chat.running) return "A Bot Chat is one continuous conversation, so /new compacts it. Wait for the reply to finish.";
+        return undefined;
+      }
+      if (!started) return "This chat hasn't started yet. Send a message first.";
+      if (status !== "connected") return "Not connected to Hermes.";
+      if (def.name === "delete" && chat.running) return "A chat with a reply running can't be deleted.";
+      // A Bot Chat's title is its identity, and it is its bot's one chat (ADR 0066).
+      if (def.name === "rename" && isBotChat(chat)) return "A Bot Chat's name is how Hermes finds it, so it can't be renamed.";
+      if (def.name === "delete" && isBotChat(chat)) return "A Bot Chat is its bot's one continuous chat, so Highwing doesn't delete it.";
+      if (def.scope === "local") return undefined;
+      if (serverCommands.state === "loading") return "Checking whether this Hermes has it…";
+      if (serverCommands.state === "failed") return `Couldn't check whether this Hermes has it: ${serverCommands.reason}`;
+      if (serverCommands.list.replaced.has(def.name))
+        return `This Hermes has a quick or plugin command called /${def.name}, which it would run instead, so Highwing doesn't run it.`;
+      if (serverCommands.list.unsure.has(def.name))
+        return `Hermes couldn't list its quick and plugin commands, so it can't tell whether one would run instead of /${def.name}.`;
+      if (!serverCommands.list.listed.has(def.name)) return "This Hermes doesn't list it, so it may not have it. Updating Hermes may add it.";
+      if (!chat.runtimeId) return "This chat is still loading from Hermes.";
+      if (def.name === "steer" && !chat.running) return "No reply is running to steer. Send it as a message instead.";
+      if (def.name === "goal") return setGoalWhy;
+      return undefined;
+    },
+    run: async (def, arg, still) => {
+      const key = shownDraft;
+      if (commandsRunning.has(key)) throw new Error("A command typed in this chat is still running.");
+      commandsRunning.add(key);
+      const typed = savedDrafts.get(key);
+      const done = () => savedDrafts.get(key) === typed && savedDrafts.take(key);
+      const here = () => still() && stillIn();
+      try {
+        if (def.name === "new") {
+          // A Bot Chat is one continuous conversation: /new compacts it instead, as in Hermes's desktop (ADR 0066).
+          if (isBotChat(chat)) {
+            const res = await hermes.compact(chat.id);
+            if (here()) done();
+            return newInBotChatNote(res);
+          }
+          done();
+          onNew();
+          return undefined;
+        }
+        // The pane gives way at once; the Draft goes only once Hermes has deleted the chat, so a refusal keeps it.
+        if (def.name === "delete") {
+          if (await onDelete()) done();
+          return undefined;
+        }
+        if (def.name === "rename") {
+          try {
+            await hermes.rename(chat.id, arg.replace(/\s+/g, " "), chat.title);
+          } catch (e) {
+            throw e instanceof RenameConflict ? new Error(`This chat was renamed in another Hermes client meanwhile, to "${e.title}". Rename again to replace it.`) : e;
+          }
+          if (here()) done();
+          return undefined;
+        }
+        // Its answer in the transcript says how it went, Hermes's refusal included, so a refusal keeps the words typed.
+        if (def.name === "btw") {
+          if ((await hermes.askSideQuestion(chat.id, arg)) && here()) done();
+          return undefined;
+        }
+        // Set a goal shows the check before anything is saved, so /goal opens it rather than going to Hermes as typed.
+        if (def.name === "goal") {
+          if (here()) {
+            done();
+            setSettingGoal({ outcome: arg });
+          }
+          return undefined;
+        }
+        const res = await hermes.runCommand(chat.id, def, arg);
+        if (!here()) return undefined;
+        done();
+        if (res.kind === "output") return res.text;
+        // Hermes wants the words sent as the chat's next message instead, as for a /steer after the reply ended. It goes
+        // straight to the chat, so whatever the owner has typed since stays in the composer; a failure is a Failed message.
+        await hermes.send(chat.id, res.message);
+        return res.notice;
+      } finally {
+        commandsRunning.delete(key);
+      }
+    },
+  };
+  // Extension commands (ADR 0126, section 5): after the app's commands and the skills, never a name either has. One runs
+  // in its sandbox on this computer and sends nothing to Hermes. It reads this chat only while it runs and while this
+  // composer is still on the chat. Text it adds goes into this chat's Draft at once, and the typed command leaves the
+  // Draft once it has answered. Its views open in the Preview.
+  const extensions = useExtensions();
+  const openPreview = useOpenPreview();
+  const latestChat = useRef(chat);
+  latestChat.current = chat;
+  const offeredSkills = status === "connected" ? skillCommands.skills?.offered : undefined;
+  const offeredExtensions = useMemo(() => offeredCommands(extensions.states, takenName(offeredSkills)).offered, [extensions.states, offeredSkills]);
+  commands.extensions = {
+    offered: offeredExtensions,
+    why: (cmd) => {
+      if (!started) return "This chat hasn't started yet. Send a message first.";
+      const missing = cmd.needs.find((n) => caps.caps[n].state === "unsupported");
+      return missing && `This Hermes doesn't support ${CAPABILITIES.find((c) => c.id === missing)?.label ?? missing}, which ${cmd.extension} needs.`;
+    },
+    run: async (cmd, arg, still) => {
+      const key = shownDraft;
+      const typed = savedDrafts.get(key);
+      const here = () => still() && stillIn();
+      const ctx: ChatContext = {
+        connection: connection.id,
+        profile,
+        chat: chat.id,
+        title: chat.title || "Untitled chat",
+        items: () => latestChat.current.items,
+        addToDraft: (text) => {
+          const now = savedDrafts.get(key);
+          savedDrafts.set(key, now ? `${now}\n\n${text}` : text);
+        },
+        still: here,
+      };
+      const res = await extensions.store.run(cmd.id, { kind: "command", name: cmd.name, arg }, ctx);
+      if (!here()) return undefined;
+      const now = savedDrafts.get(key);
+      if (now === typed) savedDrafts.take(key);
+      else if (now.startsWith(`${typed}\n\n`)) savedDrafts.set(key, now.slice(typed.length + 2));
+      const manifest = extensions.states.find((s) => s.manifest.id === cmd.id)?.manifest;
+      for (const view of res.views) openPreview?.({ kind: "extension", id: cmd.id, view, title: manifest?.views.find((v) => v.id === view)?.title ?? view });
+      return res.note;
+    },
+  };
+
+  // A message sent while the reply runs, by the Follow-up behavior setting (ADR 0057): queued (queueApi), or steered
+  // into the reply through the same route as a typed /steer, and only when /steer could run now. The Draft empties only
+  // once Hermes has taken the words, and only if the owner hasn't changed it meanwhile. If the reply ended, or Hermes
+  // couldn't steer it yet, the words go to the end of the queue instead, so they never jump a message queued earlier.
+  const followUpMode = useSyncExternalStore(subscribeUIPrefs, getUIPrefs).followUp;
+  const followUp: FollowUpHost | undefined = queueApi && {
+    mode: followUpMode,
+    why: () => commands.why(STEER),
+    steer: async (text) => {
+      const key = shownDraft;
+      const typed = savedDrafts.get(key);
+      const done = () => savedDrafts.get(key) === typed && savedDrafts.take(key);
+      if (await hermes.steer(chat.id, text) === "steered") {
+        done();
+        return undefined;
+      }
+      if (!stillIn()) throw new Error(`The profile changed to ${hermes.profile} meanwhile.`);
+      const why = hermes.enqueue(chat.id, text);
+      if (why) throw new Error(`Hermes couldn't steer the reply just then, and it couldn't be queued: ${why}`);
+      done();
+      return "Hermes couldn't steer the reply just then, so your message is queued instead.";
+    },
+  };
+
+  // An opened chat shows its stored history and is marked read; a chat already open on this connection is left as it
+  // is. Until connected it shows its Saved copy, and after a reconnect it loads again. Settings covers the panes, so
+  // the chats aren't on screen meanwhile.
+  useEffect(() => {
+    if (!chatId || !visible) return;
+    void hermes.open(chatId, paneKey);
+    return () => hermes.leave(chatId, paneKey);
+  }, [hermes, chatId, status, paneKey, visible, profile]);
+
+  return (
+    <>
+    <ChatPane
+      key={`${profile}/${chat.id}`}
+      chat={chat}
+      projects={projectNames}
+      server={server}
+      snoozedUntil={snoozedUntil}
+      notice={
+        !started && (shownProject || worktree) ? (
+          <NewChatSettingsView
+            settings={startSettings}
+            where={where}
+            profile={profile}
+            problem={modelProblem(startSettings, catalog)}
+            worktree={worktree && { branch: worktree.branch, path: worktree.path, onDrop: onDropWorktree }}
+          />
+        ) : undefined
+      }
+      banner={
+        started && applying && shownProject?.defaults ? (
+          <ApplyDefaults
+            project={shownProject.name}
+            defaults={shownProject.defaults}
+            current={chat.model}
+            where={where}
+            running={!!chat.running}
+            onApply={async ({ model, folder }) => {
+              if (model) await hermes.setModel(chat.id, model);
+              if (folder) await hermes.setFolder(chat.id, folder);
+            }}
+            onClose={(applied) => {
+              setApplying(false);
+              if (applied && stillIn()) onToast(applied);
+            }}
+          />
+        ) : undefined
+      }
+      onUsage={started ? () => void hermes.refreshUsage(chat.id) : undefined}
+      notLoaded={started && status !== "connected" && !chat.runtimeId && chat.items.every(isOutgoing)}
+      findTarget={findTarget}
+      jumpTo={jump}
+      reveal={focusItem}
+      showSubagent={showSubagent}
+      onJumpMissed={() =>
+        onToast(jump?.rowId !== undefined ? "Couldn't find the message this branch was made from in the chat's history." : "Couldn't find the tool call that made this file in the chat's history.")
+      }
+      status={status}
+      alsoPostsIn={hermes.alsoPostsIn(chat.id)}
+      draft={composerText}
+      draftKey={shownDraft}
+      onDraft={(text, how) => savedDrafts.set(shownDraft, text, how)}
+      onDraftStep={(step) => savedDrafts[step](shownDraft)}
+      onRetry={retry}
+      onEdit={edit}
+      onDismiss={(itemId) => hermes.dismiss(chat.id, itemId)}
+      onAttach={(paths) => hermes.checkAttachments(paths)}
+      onSend={send}
+      onStop={() => void hermes.stop(chat.id)}
+      onAnswer={(approvalId, choice, confirmed) => void hermes.answerApproval(chat.id, approvalId, choice, confirmed)}
+      onQuestion={(itemId, answer) => void hermes.answerQuestion(chat.id, itemId, answer)}
+      pin={started ? pin : undefined}
+      onSettle={started ? onSettle : undefined}
+      onExport={started ? onExport : undefined}
+      onSnapshotSettings={onSnapshotSettings}
+      onCopyLink={started ? onCopyLink : undefined}
+      onDelete={started ? () => void onDelete() : undefined}
+      onArchive={started ? onArchive : undefined}
+      onOpenJob={onOpenJob}
+      active={active}
+      visible={visible}
+      split={split}
+      screenshots={screenshots}
+      screenshotKeys={screenshotKeys}
+      voice={voice}
+      // A Voice conversation's turn goes straight to the chat, as a slash command's message does: what the owner has
+      // typed stays in the composer, and a failure is a Failed message (ADR 0111).
+      voiceSend={sessionHere ? (text) => hermes.sendTracked(chat.id, text) : undefined}
+      commands={commands}
+      references={{ desk: referenceDesk, onTextModelSettings: onTextGenerationSettings }}
+      onDismissSideQuestion={(id) => hermes.dismissSideQuestion(chat.id, id)}
+      followUp={followUp}
+      compare={compare}
+      onCheckpoints={sessionHere && caps.caps.checkpoints.state !== "unsupported" ? () => hermes.checkCheckpoints(chat.id) : undefined}
+      headActions={
+        <>
+          {started && inWorktree && (
+            <button
+              className="chip wt-chip"
+              title={`Works in the worktree ${inWorktree.path} on ${inWorktree.target}. Open it in the Repository screen.`}
+              aria-label={`Works in the worktree ${inWorktree.path}, on the branch ${inWorktree.branch}. Open it in the Repository screen`}
+              onClick={() => onOpenWorktree(inWorktree)}
+            >
+              <GitBranch size={13} aria-hidden /> <span className="mono">{inWorktree.branch}</span>
+            </button>
+          )}
+          {sessionHere && missions.state === "supported" && (
+            <button className="icon-btn" title={setGoalWhy ?? "Set a goal…"} aria-label="Set a goal" disabled={!!setGoalWhy} onClick={() => setSettingGoal({ outcome: "" })}>
+              <Target size={16} />
+            </button>
+          )}
+          {sessionHere && shownProject?.has && shownProject.defaults && (
+            <button className={`icon-btn ${applying ? "on" : ""}`} title={`Apply ${shownProject.name}'s defaults to this chat…`} aria-pressed={applying} onClick={() => setApplying((a) => !a)}>
+              <FolderCog size={16} />
+            </button>
+          )}
+          {previewControls}
+        </>
+      }
+      goalBar={
+        control?.goal && sessionHere && missions.state !== "unsupported" ? (
+          <GoalBar
+            goal={control.goal}
+            blocked={goalBlocked ?? hermes.goalUnchecked()}
+            resumeBlocked={chat.running ? "A reply is running. Resume once it ends." : undefined}
+            act={goalApi.act}
+          />
+        ) : undefined
+      }
+      queue={queue}
+      queueApi={queueApi}
+      subagents={
+        sessionHere
+          ? {
+              refresh: () => hermes.refreshSubagents(chat.id),
+              output: (id) => hermes.subagentOutput(chat.id, id),
+              steer: (id, text) => hermes.steerSubagent(chat.id, id, text),
+              stop: (id) => hermes.stopSubagent(chat.id, id),
+              blocked:
+                status !== "connected" || !chat.runtimeId
+                  ? "Hermes isn't connected to this chat right now."
+                  : hermes.capabilities.get("subagents").state === "unsupported"
+                    ? "This Hermes can't steer or stop subagents."
+                    : undefined,
+            }
+          : undefined
+      }
+      branch={started && policy.branch ? { blocked: branchBlocked(chat, status === "connected"), onBranch: setBranchFrom } : undefined}
+      onRun={started ? setRunOf : undefined}
+      branchedFrom={
+        link && (
+          <BranchedFrom
+            link={link}
+            parentListed={parentListed}
+            onOpen={() => onShowAt(link)}
+            finish={
+              link.variant?.pending
+                ? {
+                    busy: finishing,
+                    blocked: replayBlocked(chat, status === "connected"),
+                    run: () => {
+                      setFinishing(true);
+                      hermes.finishReplay(chat.id).then(
+                        (warnings) => warnings.length && onToast(warnings.join(" ")),
+                        (e) => onToast((e as Error).message),
+                      ).finally(() => setFinishing(false));
+                    },
+                  }
+                : undefined
+            }
+          />
+        )
+      }
+      replay={
+        started && policy.replay
+          ? { blocked: replayBlocked(chat, status === "connected"), onReplay: (itemId, kind) => setReplayFrom({ itemId, kind }) }
+          : undefined
+      }
+      variants={variants.size ? { byTurn: variants, onPick: (id, turn) => id !== chat.id && onOpenTurn(id, turn) } : undefined}
+      footer={
+        <StatusBar
+          chat={chat}
+          status={status}
+          context={
+            policy.session === "live"
+              ? {
+                  inspect: () => hermes.inspectContext(chat.id),
+                  history: () => hermes.compactionHistory(chat.id),
+                  compact: () => hermes.compact(chat.id),
+                  cannotCompact: () => hermes.cannotCompact(),
+                  openMemory: onMemorySettings,
+                }
+              : undefined
+          }
+        />
+      }
+      modelControls={
+        <ModelControls
+          catalog={catalog}
+          current={shownModel}
+          defaultEffort={catalog?.defaultEffort}
+          favorites={favorites}
+          onPick={pickModel}
+          onToggleFavorite={toggleModelFavorite}
+          onCompare={onCompare}
+        >
+          {started && (
+            <ApprovalsPill key={chat.id} approvals={chat.live?.approvals} connected={status === "connected"} profile={profile} onPick={(pick) => hermes.setApprovals(chat.id, pick)} />
+          )}
+        </ModelControls>
+      }
+    />
+    {replayFrom && (
+      <ReplayDialog
+        key={`${chat.id}/${replayFrom.itemId}/${replayFrom.kind}`}
+        kind={replayFrom.kind}
+        api={{ preview: () => hermes.previewReplay(chat.id, replayFrom.itemId, replayFrom.kind), make: (p, words) => hermes.replay(p, words) }}
+        onClose={() => setReplayFrom(undefined)}
+        done={(id, warnings) => {
+          setReplayFrom(undefined);
+          if (!stillIn()) return;
+          // The new version opens here; this chat, its Draft and its answer stay as they were.
+          onOpenChat(id);
+          if (warnings.length) onToast(warnings.join(" "));
+        }}
+      />
+    )}
+    {settingGoal && (
+      <SetGoalDialog key={chat.id} api={goalApi} outcome={settingGoal.outcome} blocked={setGoalWhy} onClose={() => setSettingGoal(undefined)} onDone={() => setSettingGoal(undefined)} />
+    )}
+    {runOf && <RunDialog key={`${chat.id}/${runOf}`} api={{ read: () => hermes.run(chat.id, runOf) }} onClose={() => setRunOf(undefined)} />}
+    {branchFrom && (
+      <BranchDialog
+        key={`${chat.id}/${branchFrom}`}
+        api={{ preview: () => hermes.previewBranch(chat.id, branchFrom), make: (p, title) => hermes.branch(p, title) }}
+        onClose={() => setBranchFrom(undefined)}
+        done={(id, warnings) => {
+          setBranchFrom(undefined);
+          if (!stillIn()) return;
+          // The branch opens here; this chat, and its Draft, stay as they were.
+          onOpenChat(id);
+          if (warnings.length) onToast(`Branch made. ${warnings.join(" ")}`);
+        }}
+      />
+    )}
+    </>
+  );
+}
+
+/** The Drafts whose slash command is running, by draft key, across both panes. */
+const commandsRunning = new Set<string>();
+
+type ServerCommands = { state: "loading" } | { state: "ready"; list: ServerCommandList } | { state: "failed"; reason: string };
+
+/**
+ * The skills the composer offers for `profile` (`Hermes.skillCommands`), read once connected and again on `refresh` if
+ * they may have changed. Undefined while unknown, or when this Hermes can't run skills from the composer.
+ */
+/**
+ * Each chat's handoff (dispatched.ts), worked out again whenever one changes with nothing else happening: a wake grace
+ * ending, a task stalling, or one going stale. `clock` is the last of those times this render has passed.
+ */
+function useHandoffs(chats: Chat[], stops: StopWaiting): ReadonlyMap<string, Handoff> {
+  const [clock, setClock] = useState(Date.now);
+  const map = useMemo(() => handoffsOf(chats, stops, Math.max(clock, Date.now())), [chats, stops, clock]);
+  useEffect(() => {
+    const at = nextHandoffChange(chats, stops, Date.now());
+    if (at === undefined) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.max(0, at - Date.now()) + 1);
+    return () => clearTimeout(timer);
+  }, [chats, stops, clock]);
+  return map;
+}
+
+function useSkillCommands(hermes: Hermes, connected: boolean, profile: string): { skills?: SkillCommands; refresh: () => void } {
+  const [read, setRead] = useState<{ profile: string; skills?: SkillCommands }>();
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    if (!connected) return;
+    let live = true;
+    const keep = (skills?: SkillCommands) => live && setRead((r) => (r?.profile === profile && r.skills === skills ? r : { profile, skills }));
+    hermes.skillCommands().then(keep, () => keep(undefined));
+    return () => void (live = false);
+  }, [hermes, connected, profile, asked]);
+  const refresh = useCallback(() => setAsked((n) => n + 1), []);
+  return { skills: read?.profile === profile ? read.skills : undefined, refresh };
+}
+
+/** Which of the registry's server commands Hermes lists for `profile`, read once connected (`Hermes.serverCommands`). */
+function useServerCommands(hermes: Hermes, connected: boolean, profile: string): ServerCommands {
+  const [read, setRead] = useState<{ profile: string; value: ServerCommands }>();
+  useEffect(() => {
+    if (!connected) return;
+    let live = true;
+    hermes.serverCommands().then(
+      (list) => live && setRead({ profile, value: { state: "ready", list } }),
+      (e) => live && setRead({ profile, value: { state: "failed", reason: errorText(e) } }),
+    );
+    return () => void (live = false);
+  }, [hermes, connected, profile]);
+  return read?.profile === profile ? read.value : { state: "loading" };
+}

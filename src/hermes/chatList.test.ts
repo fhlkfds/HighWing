@@ -1,0 +1,349 @@
+import { describe, expect, it, vi } from "vitest";
+import { FakeHermes, row } from "./fakeHermes";
+import { memoryCache } from "./memoryCache";
+import type { Chat } from "./model";
+import { type ChatCache, connect } from "./transport";
+import { RestError } from "./pipe";
+
+async function signedIn(server = new FakeHermes(), cache?: ChatCache) {
+  const hermes = await connect(server.openPipe, "default", cache);
+  const chats = () => hermes.getSnapshot().chats;
+  return { server, hermes, chats, chat: (id: string) => chats().find((c) => c.id === id)! };
+}
+
+const ids = (chats: Chat[]) => chats.map((c) => c.id).sort();
+
+describe("Chat list sync", () => {
+  it("lists the profile's chats from the past month, most recent first, through dashboard REST", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 1), row("b", 29), row("c", 31), row("d", 0.1)];
+    const { hermes, chats } = await signedIn(server);
+    await hermes.sync();
+
+    const q = server.restRequests[0].query;
+    expect(server.restRequests[0]).toMatchObject({ method: "GET", path: "/api/sessions" });
+    expect(Object.fromEntries(q)).toMatchObject({ profile: "default", order: "recent", limit: "100", offset: "0" });
+    expect(chats().map((c) => c.id)).toEqual(["d", "a", "b"]);
+  });
+
+  it("makes pinned chats Active and the rest Settled", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("pinned", 2, { pinned: true }), row("loose", 1)];
+    const { hermes, chat } = await signedIn(server);
+    await hermes.sync();
+    expect(chat("pinned").settled).toBe(false);
+    expect(chat("loose").settled).toBe(true);
+  });
+
+  it("shows this app's and gui chats without a source, and maps the rest", async () => {
+    const server = new FakeHermes();
+    const sources = ["hermes-chat", "gui", "telegram", "discord", "cli", "tui", "desktop", "api_server"];
+    server.sessions = sources.map((s, i) => row(s, i, { source: s }));
+    const { hermes, chat } = await signedIn(server);
+    await hermes.sync();
+    expect(sources.map((s) => chat(s).source)).toEqual(["app", "app", "telegram", "discord", "cli", "cli", "desktop", "other"]);
+  });
+
+  it("leaves out cron jobs and chats archived in Hermes", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("job", 1, { source: "cron" }), row("gone", 1, { archived: true, pinned: true }), row("kept", 1)];
+    const { hermes, chats } = await signedIn(server);
+    await hermes.sync();
+    expect(server.restRequests[0].query.get("exclude_sources")).toBe("cron");
+    expect(ids(chats())).toEqual(["kept"]);
+  });
+
+  it("titles a chat from its first message until Hermes names it", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("named", 1), row("unnamed", 1, { title: null, preview: "Check the NAS" }), row("blank", 1, { title: "", preview: "" })];
+    const { hermes, chat } = await signedIn(server);
+    await hermes.sync();
+    expect([chat("named").title, chat("unnamed").title, chat("blank").title]).toEqual(["Chat named", "Check the NAS", "Untitled chat"]);
+    expect(chat("named").updatedAt).toBeCloseTo(server.sessions[0].last_active! * 1000, -1);
+  });
+
+  it("pages until the list passes a month ago, without repeating the pinned chats each page carries", async () => {
+    const server = new FakeHermes();
+    const recent = Array.from({ length: 150 }, (_, i) => row(`r${i}`, i * 0.1, { pinned: i % 50 === 0 }));
+    const old = Array.from({ length: 300 }, (_, i) => row(`o${i}`, 40 + i));
+    server.sessions = [...recent, ...old, row("old-pin", 90, { pinned: true })];
+    const { hermes, chats } = await signedIn(server);
+    await hermes.sync();
+    expect(server.restRequests.filter((r) => r.path === "/api/sessions").map((r) => r.query.get("offset"))).toEqual(["0", "100"]);
+    expect(ids(chats())).toEqual(recent.map((r) => r.id).sort());
+  });
+
+  it("keeps the transcript of a chat it already has when the list refreshes", async () => {
+    const { server, hermes, chat } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "hello");
+    server.event(server.runtimeIdOf(id)!, "message.complete", { text: "Hi!", status: "complete" });
+    server.sessions.find((s) => s.id === id)!.title = "Greeting";
+    await hermes.sync();
+    expect(chat(id)).toMatchObject({ title: "Greeting", runtimeId: "rt-1" });
+    expect(chat(id).items.map((i) => i.kind)).toEqual(["user", "assistant"]);
+  });
+
+  it("keeps a new chat in the list before Hermes has stored it", async () => {
+    const { hermes, chats } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.sync();
+    expect(ids(chats())).toEqual([id]);
+  });
+
+  it("drops chats that left the server's list", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 1), row("b", 1)];
+    const { hermes, chats } = await signedIn(server);
+    await hermes.sync();
+    server.sessions = [row("a", 1)];
+    await hermes.sync();
+    expect(ids(chats())).toEqual(["a"]);
+  });
+
+  it("refreshes when Hermes says its sessions changed", async () => {
+    const { server, hermes, chats } = await signedIn();
+    server.sessions = [row("from-telegram", 0, { source: "telegram" })];
+    server.broadcast("sessions.changed");
+    await hermes.idle();
+    expect(ids(chats())).toEqual(["from-telegram"]);
+  });
+
+  it("tells no one when a refresh finds nothing changed", async () => {
+    const server = new FakeHermes();
+    const usage = { input_tokens: 1200, output_tokens: 300, api_call_count: 2, estimated_cost_usd: 0.01, cost_status: "estimated" };
+    server.sessions = [row("a", 1, usage), row("b", 2, { _lineage_ids: ["b0", "b"] }), row("c", 3, { pinned: true, last_read_at: 0 })];
+    const { hermes } = await signedIn(server);
+    await hermes.sync();
+    const before = hermes.getSnapshot();
+    let told = 0;
+    hermes.subscribe(() => told++);
+    server.broadcast("sessions.changed");
+    await hermes.idle();
+    await hermes.sync();
+    expect(told).toBe(0);
+    expect(hermes.getSnapshot()).toBe(before);
+  });
+
+  it("keeps the chats a refresh didn't change, and shows the one it did", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 1), row("b", 2)];
+    const { hermes, chat } = await signedIn(server);
+    await hermes.sync();
+    const a = chat("a");
+    server.sessions[1].title = "Renamed elsewhere";
+    server.broadcast("sessions.changed");
+    await hermes.idle();
+    expect(chat("b").title).toBe("Renamed elsewhere");
+    expect(chat("a")).toBe(a);
+  });
+
+  it("says when Usage was read when it is opened, though a list refresh read the same totals earlier", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 0.01, { input_tokens: 1200, output_tokens: 300, api_call_count: 2, estimated_cost_usd: 0.01, cost_status: "estimated" })];
+    const { hermes, chat } = await signedIn(server);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-09T21:00:00Z"));
+      await hermes.sync();
+      vi.setSystemTime(new Date("2026-11-09T22:30:00Z"));
+      await hermes.refreshUsage("a");
+      expect(chat("a").usage!.readAt).toBe(Date.parse("2026-11-09T22:30:00Z"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs one more sync, not one per request, when asked while a sync is running", async () => {
+    const { server, hermes } = await signedIn();
+    await Promise.all([hermes.sync(), hermes.sync(), hermes.sync()]);
+    expect(server.restRequests.filter((r) => r.path === "/api/sessions")).toHaveLength(2);
+  });
+
+  it("keeps the list and reports the error when a refresh fails", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 1)];
+    const { hermes, chats } = await signedIn(server);
+    await hermes.sync();
+    server.rest["GET /api/sessions"] = () => {
+      throw new RestError(503, "store busy");
+    };
+    await hermes.sync();
+    expect(hermes.getSnapshot()).toMatchObject({ syncError: "Couldn't refresh the chat list: The dashboard answered 503: store busy" });
+    expect(ids(chats())).toEqual(["a"]);
+    server.rest["GET /api/sessions"] = () => ({ sessions: [], total: 0, limit: 100, offset: 0, storage: {} });
+    await hermes.sync();
+    expect(hermes.getSnapshot().syncError).toBeUndefined();
+  });
+});
+
+describe("Local chat list cache", () => {
+  it("tells listeners when a relaunch first reads the list, though it matches the saved one", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 1), row("b", 2, { pinned: true })];
+    const cache = memoryCache();
+    const first = await connect(server.openPipe, "default", cache);
+    await first.sync();
+    await first.close();
+    const second = await connect(server.openPipe, "default", cache);
+    expect(ids(second.getSnapshot().chats)).toEqual(["a", "b"]);
+    const heard: boolean[] = [];
+    second.subscribe(() => heard.push(second.hasListed()));
+    await second.sync();
+    expect(heard).toContain(true);
+  });
+
+  it("shows the cached list as soon as Hermes is connected", async () => {
+    const cached: Chat = { id: "c1", title: "Cached", source: "telegram", settled: true, updatedAt: 1, items: [] };
+    const { chats } = await signedIn(new FakeHermes(), memoryCache({ saved: { default: [cached] } }));
+    expect(chats()).toEqual([cached]);
+  });
+
+  it("saves the synced list for the profile, without transcripts or live state", async () => {
+    const cache = memoryCache();
+    const { server, hermes } = await signedIn(new FakeHermes(), cache);
+    const id = await hermes.newChat();
+    await hermes.send(id, "hello");
+    server.sessions.push(row("t", 2, { source: "telegram", pinned: true }));
+    await hermes.sync();
+    expect(cache.saved.default.find((c) => c.id === "t")).toEqual({
+      id: "t",
+      title: "Chat t",
+      source: "telegram",
+      settled: false,
+      updatedAt: expect.any(Number),
+      unread: false,
+      items: [],
+    });
+    expect(cache.saved.default.find((c) => c.id === id)).toEqual({
+      id,
+      title: "hello",
+      source: "app",
+      settled: false,
+      updatedAt: expect.any(Number),
+      unread: false,
+      folder: server.hermesHome,
+      items: [],
+    });
+  });
+});
+
+describe("Active is Hermes's pinned flag", () => {
+  it("pins a new chat as soon as Hermes has stored it", async () => {
+    const { server, hermes } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "hello");
+    await hermes.idle();
+    const patch = server.restRequests.find((r) => r.method === "PATCH")!;
+    expect(patch).toMatchObject({ path: `/api/sessions/${id}`, body: { pinned: true, profile: "default" } });
+    expect(server.sessions.find((s) => s.id === id)!.pinned).toBe(true);
+  });
+
+  it("pins at the end of the turn if Hermes hadn't stored the chat yet, and keeps it Active meanwhile", async () => {
+    const { server, hermes, chat } = await signedIn();
+    const id = await hermes.newChat();
+    server.rest[`GET /api/sessions/${id}/mutation-snapshot`] = () => ({ session_id: id, exists: false, runtime_revision: 0 });
+    server.rest[`PATCH /api/sessions/${id}`] = () => {
+      throw new RestError(404, `{"detail":"not_found"}`);
+    };
+    await hermes.send(id, "hello");
+    await hermes.sync();
+    expect(chat(id).settled).toBe(false);
+    expect(hermes.getSnapshot().syncError).toBeUndefined();
+
+    delete server.rest[`GET /api/sessions/${id}/mutation-snapshot`];
+    delete server.rest[`PATCH /api/sessions/${id}`];
+    server.event(server.runtimeIdOf(id)!, "message.complete", { text: "Hi!", status: "complete" });
+    await hermes.idle();
+    expect(server.sessions.find((s) => s.id === id)!.pinned).toBe(true);
+  });
+
+  it("reports a pin that still fails at the end of the turn", async () => {
+    const { server, hermes, chat } = await signedIn();
+    const id = await hermes.newChat();
+    server.rest[`PATCH /api/sessions/${id}`] = () => {
+      throw new RestError(503, "busy");
+    };
+    await hermes.send(id, "hello");
+    server.event(server.runtimeIdOf(id)!, "message.complete", { text: "Hi!", status: "complete" });
+    await hermes.idle();
+    expect(hermes.getSnapshot().syncError).toBe("Couldn't keep a chat Active on the server: The dashboard answered 503: busy");
+    expect(chat(id).settled).toBe(false);
+  });
+
+  it("keeps Active and Settled on this computer for a chat Hermes has but won't pin", async () => {
+    // bf0203a answers 404 not_found to every edit of a session started by a WS client.
+    const server = new FakeHermes();
+    const cache = memoryCache();
+    const { hermes, chat } = await signedIn(server, cache);
+    const id = await hermes.newChat();
+    const refuse = () => {
+      throw new RestError(404, `{"detail":"not_found"}`);
+    };
+    server.rest[`PATCH /api/sessions/${id}`] = refuse;
+    await hermes.send(id, "hello");
+    server.event(server.runtimeIdOf(id)!, "message.complete", { text: "Hi!", status: "complete" });
+    await hermes.idle();
+    await hermes.sync();
+    await hermes.idle();
+    expect(hermes.getSnapshot().syncError).toBeUndefined();
+    expect(chat(id)).toMatchObject({ settled: false, settledHere: true });
+
+    // Refreshing doesn't write it again, and settling is kept too.
+    const patches = () => server.restRequests.filter((r) => r.method === "PATCH").length;
+    const before = patches();
+    await hermes.sync();
+    await hermes.idle();
+    expect(patches()).toBe(before);
+    await hermes.settle(id);
+    await hermes.sync();
+    expect(hermes.getSnapshot().syncError).toBeUndefined();
+    expect(chat(id).settled).toBe(true);
+
+    // The next start shows it where the owner left it, though Hermes has it unpinned.
+    await hermes.unsettle(id);
+    await hermes.close();
+    const again = await signedIn(server, cache);
+    await again.hermes.sync();
+    expect(server.sessions.find((s) => s.id === id)!.pinned).toBeFalsy();
+    expect(again.chat(id).settled).toBe(false);
+  });
+
+  it("resumes a Settled chat to reply in it, then makes it Active and pins it", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("tg", 3, { source: "telegram" })];
+    const { hermes, chat } = await signedIn(server);
+    await hermes.sync();
+    await hermes.send("tg", "follow up");
+
+    expect(server.last("session.resume")!.params).toEqual({ session_id: "tg", profile: "default", inline_images: false });
+    const runtimeId = server.runtimeIdOf("tg")!;
+    expect(server.last("prompt.submit")!.params).toEqual({ session_id: runtimeId, profile: "default", text: "follow up" });
+    expect(chat("tg")).toMatchObject({ settled: false, runtimeId, source: "telegram" });
+    await hermes.idle();
+    expect(server.sessions[0].pinned).toBe(true);
+  });
+
+  it("doesn't pin a chat that is already Active", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("p", 1, { pinned: true })];
+    const { hermes } = await signedIn(server);
+    await hermes.sync();
+    await hermes.send("p", "more");
+    server.event(server.runtimeIdOf("p")!, "message.complete", { text: "ok", status: "complete" });
+    await hermes.idle();
+    expect(server.restRequests.filter((r) => r.method === "PATCH")).toEqual([]);
+  });
+
+  it("marks the message failed if the chat can't be resumed", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("x", 1)];
+    const { hermes, chat } = await signedIn(server);
+    await hermes.sync();
+    server.sessions = [];
+    await hermes.send("x", "hi");
+    expect(chat("x")).toMatchObject({ running: false });
+    expect(chat("x").items.at(-1)).toMatchObject({ kind: "user", text: "hi", outgoing: { state: "failed", reason: "session not found: x" } });
+    expect(server.last("prompt.submit")).toBeUndefined();
+  });
+});

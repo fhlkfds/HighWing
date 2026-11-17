@@ -1,0 +1,118 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Every ADR has a number of its own
+        run: node scripts/check-adrs.mjs
+      - run: npm ci
+      - run: npm test
+      - run: npm test
+      - run: npm audit --audit-level=high
+      - run: npm run build
+      - run: scripts/release/attach-release.test.sh
+      - name: Every version file says the same version
+        run: node scripts/release/version.mjs check
+
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium-headless-shell
+      - run: npm run e2e
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: e2e
+          path: e2e/out
+          if-no-files-found: ignore
+
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install Tauri system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            librsvg2-dev libdbus-1-dev xvfb
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+      # tauri::generate_context! needs frontendDist (../dist) to exist at compile time.
+      - run: mkdir -p dist
+      # Every test binary: the library's unit tests and each file in tests/.
+      - run: cargo test --lib --tests
+        working-directory: src-tauri
+      # Pastes into a WebKitGTK view, on a display of its own because it empties the clipboard.
+      - run: xvfb-run -a cargo test --test clipboard -- --ignored
+        working-directory: src-tauri
+      # Reads the selection and the clipboard (ADR 0172), on a display of its own because it takes both.
+      - run: xvfb-run -a cargo test --test selection -- --ignored
+        working-directory: src-tauri
+      # The preview's native page view: WebKitGTK needs a display and a session bus, and GTK takes one thread for the
+      # whole process, so each ignored page_view test runs in a process of its own. WebKit sandboxes the page with
+      # bubblewrap, which needs the unprivileged user namespaces Ubuntu 24.04's AppArmor turns off by default.
+      - name: Page view tests, each on its own display
+        working-directory: src-tauri
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          tests=$(cargo test --lib page_view -- --ignored --list --format=terse | sed -n 's/: test$//p')
+          [ -n "$tests" ] || { echo "::error::No ignored page_view tests were found."; exit 1; }
+          for t in $tests; do
+            xvfb-run -a dbus-run-session -- cargo test --lib -- --ignored --exact "$t"
+          done
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+      - run: cargo fmt --check
+        working-directory: src-tauri
+
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: pipx install ruff==0.17.3
+      - run: ruff check .
+      # Rust sends the two repo helpers to the server as one program (repo_git.rs, HELPER), so lint them as one too.
+      - run: cat src-tauri/src/repo_git_helper.py src-tauri/src/repo_worktree_helper.py | ruff check --stdin-filename src-tauri/src/repo_helper.py -
+
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-audit
+      # Fails on a known vulnerability in Cargo.lock; unmaintained and unsound crates are listed as warnings.
+      - run: cargo audit
+        working-directory: src-tauri

@@ -1,0 +1,68 @@
+name: windows-smoke
+
+# A real sign-in and send on Windows (ADR 0069, #308): builds the app as installers.yml does (plus WebView2's DevTools port in
+# the window config), starts the stand-in Hermes dashboard, attaches msedgedriver to the app's WebView2 and drives the
+# verify skill's sign-in and send recipes through wd.mjs, then checks that a page in the Preview can't call the app's
+# commands (#466). Screenshots, the page's errors, the WebView2 console log, the driver log, the stand-in's request log
+# and the Preview probe's log are uploaded as artifacts. Runs on every PR that touches the app, its build or the scripts
+# it drives (#560), and by hand: about ten minutes on a warm cache. It informs; main has no required checks.
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "bench/**"
+      - "index.html"
+      - "vite.config.ts"
+      - "tsconfig*.json"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/windows-smoke/**"
+      - ".github/workflows/windows-smoke.yml"
+      - ".claude/skills/verify-hermes-chat/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Keep LF line endings (bash scripts and wd.mjs run here)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+          shared-key: nsis
+      - run: npm ci
+      - name: Build the app (release, frontend embedded, no installer, WebView2 DevTools port on)
+        run: npx tauri build --no-bundle --config .github/windows-smoke/tauri.smoke.conf.json
+      - name: msedgedriver matching the WebView2 runtime
+        shell: pwsh
+        run: .github/windows-smoke/msedgedriver.ps1 "$env:RUNNER_TEMP\edgedriver"
+      - name: Drive a send in the real app
+        shell: bash
+        env:
+          HV_RUN: ${{ runner.temp }}\hv
+          EDGEDRIVER: ${{ runner.temp }}\edgedriver\msedgedriver.exe
+        run: .github/windows-smoke/send.sh
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-smoke-evidence
+          path: ${{ runner.temp }}\hv\evidence
+          if-no-files-found: warn

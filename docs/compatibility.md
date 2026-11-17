@@ -1,0 +1,241 @@
+# Hermes server compatibility
+
+Highwing works with more than one version of Hermes, but not every version has every feature. This guide lists what each feature needs from the Hermes server, how the app checks for it, and what the app does when the server doesn't have it. The decision record is [ADR 0044](adr/0044-capabilities-are-what-hermes-says-or-answers-checked-only-by-reading.md).
+
+To see what your server has, open **Settings → Diagnostics**, or **Settings → General → Connection diagnostics**. It shows the server's version, protocol, sign-in and feature flags, and the state of each feature below.
+
+## How the app checks
+
+The app learns what a server supports in three ways, in this order:
+
+1. **What Hermes says about itself.** `GET /api/health` gives the version and commit. `GET /api/status` gives the release date and the sign-in providers. The `gateway.ready` frame gives the protocol. `client.capabilities` lists the requests Hermes may send, such as Approvals, and `gateway.capabilities` lists feature flags.
+2. **What the app's own requests show.** When a screen reads a route and Hermes answers, that feature is supported. When Hermes answers that it has no such route or method, it is not supported.
+3. **A check.** For anything still not known about 2 seconds after the connection opens, the app sends one request that only reads. Each check has an 8-second time limit. Six features have no read to check them by: Answering Approvals, Toolset switches, Work links, Work estimate, Work reclaim, and Work stop and reassign. While Settings → Diagnostics is open, it sends each one request shaped like a change, which Hermes refuses before changing anything (ADR 0169, ADR 0179, ADR 0192). Nothing else is sent to find out, and the app sends neither check on connect.
+
+A version number alone doesn't prove that a route exists, so each feature is checked on its own. A Hermes installed from a git checkout may report its version as `unknown`; diagnostics then shows its build and commit.
+
+### What each state means
+
+| State | Meaning |
+| --- | --- |
+| Supported | Hermes answered the route or method. |
+| Not supported | Hermes has no such route (it answered `404 Not Found`, `404 No such API endpoint`, or `405`) or no such method (JSON-RPC `-32601`). The screen shows a note instead of opening, and the app sends no change for it. Updating Hermes on the server adds it. |
+| Unknown | Hermes answered, but the answer doesn't settle it: a refusal, an expired sign-in, or an answer in a shape this app doesn't read. The screen opens and finds out for itself. |
+| Couldn't check | No answer came: a timeout, a dropped connection, or a server error. This may pass. The screen opens and tries for itself. |
+
+### When the app checks again
+
+- **On each reconnect.** The app reads the version again. If the build is the same, was checked in the last 15 minutes, and every feature was settled, it keeps the results. Otherwise, it checks again.
+- **When the version changes.** If Hermes reports another build, the results for the old build are dropped and everything is checked again.
+- **When you press Check again** in Settings → Diagnostics.
+
+Switching profile opens a new connection, so it counts as a reconnect. An answer that arrives after the connection it was sent on has closed is ignored, so a slow answer from the profile you left can't change what is shown.
+
+A note that says a feature is missing stays until one of those checks, or until the screen's own read finds the route. If you update Hermes while the app stays connected, press Check again.
+
+### What is stored, and what is copied
+
+Results are kept in memory for the current sign-in only. They are never written to disk, and signing out discards them. From Hermes's answers, the app keeps only the version, build, commit, release date, protocol, feature flag names, and the names of the sign-in providers and flows. It doesn't keep the paths, process ids, or install id that `/api/status` includes.
+
+**Copy report** puts a plain-text report on the clipboard. It holds no password, cookie, WebSocket ticket, or header value. The window never has the values of your extra request headers, and the report also removes anything that looks like a secret from the reasons Hermes gives, with the same rules as the Logs screen. Redaction can miss a secret written in an unusual shape, so read the report before you share it.
+
+## Chats and the session protocol
+
+The app needs the dashboard's **legacy** session protocol on `/api/ws`. If `gateway.ready` reports `session_authority` (the canonical protocol), the app doesn't connect, and the sign-in screen says that it doesn't support that protocol yet. The app keeps refusing the canonical protocol until a tested adapter exists.
+
+Which protocol a server speaks depends on which Hermes process answers, not only on its version (checked at `f0d94882`). A standalone `hermes dashboard` or `hermes serve` (port 9119 by default) speaks the legacy one. A gateway's own address, the one `hermes gateway run` serves the Webapp at when `webapp.enabled` is on (port 9120 by default), speaks the canonical one. If the app says it can't talk to the server yet, sign in to the dashboard's address. ADR 0174 has what an adapter needs and the plan for it.
+
+The app signs in only with the dashboard's username and password (the `basic` provider). Token, OAuth, and OIDC sign-in aren't supported.
+
+## Approvals
+
+Needs Hermes to list `approval` in its answer to `client.capabilities`. A Hermes without `client.capabilities` (0.16.0 and older) asks for approvals in an older way that this app doesn't read, so Approval cards don't show and Hermes decides by the profile's own settings, or waits.
+
+## Clarify, Sudo password and Secret questions
+
+A `clarify`, `sudo` or `secret` request shows as a card, on any version, once its params parse as `tui_gateway/contracts/server_requests.py` has them at `bf0203a` and `f0d94882`: a clarify needs at least one question with a `qid`, and a secret needs its `env_var`. One that doesn't parse is handled like any question the app doesn't show (below). Clarify answers go one question at a time with `clarify.lock`, as the official app sends them, and Hermes answers the whole clarify on the last lock. A sudo password, a secret and a Skip go with `request.answer`, which says whether Hermes still waited (`expired` when it didn't). A Hermes that answers "method not found" to `request.answer` gets a plain reply to its request instead, and a late answer then gets no word back. Hermes waits 120 s for a sudo password and 300 s for a secret. A clarify waits for `agent.clarify_timeout` in Hermes's config, 3600 s by default; set to 0 or less, it waits until it is answered or the owner presses Stop.
+
+On a shared chat, Hermes sends no `request.cancel` when another app answers one of these, or an Approval in a plain reply: `resolve_response` and `lock_answer` settle the request without telling any other client (checked with two clients against a real `f0d94882`). So after a tool call in the chat finishes, after its turn ends, and at the app's periodic check (every 2 minutes, every 30 s while the inbox is open), the app asks Hermes which requests it still waits on: `session.events.since` with `last_seen` past the newest event, which replays nothing and returns `open_requests`. Once Hermes lists none, the cards that were waiting when the read went out close as answered in another app. Hermes withdraws a question it stops waiting on itself (timeout, Stop) with `request.cancel`, so a card it no longer waits on was answered. A list with any request in it closes nothing: with turn isolation (`dashboard.turn_isolation`), Hermes lists the child process's request only while the parent has none of its own (`server._open_requests`), so an unlisted card may still wait. When two questions wait at once and another app answers one, its card closes once the other is settled too, or when an answer from here comes back `expired`. Any session id gets an answer, an unknown one with nothing listed, so the app reads only for a session it holds a waiting card in. `server_requests.py` at `bf0203a` names this read, and `f0d94882` has it. A Hermes whose answer has no `open_requests`, or that doesn't know the method, closes no card this way: the card stays until Hermes withdraws it, or until an answer from here comes back `expired`. The turn ending doesn't close these cards by itself, since a background task, a plugin command or a skill can ask with no tool call in the chat. The child mirrors only its newest request, so if a turn-isolated child asks two at once and the newer one is answered, the older one's card can close early. An answer from here that Hermes calls `expired` closes the card as one Hermes had stopped waiting on.
+
+## Questions the app doesn't show
+
+The app doesn't show a password manager's questions (`vault.unlock_prompt`, `vault.save_login`, `vault.code`), `theme.pick`, or a clarify or secret whose params don't parse. How it handles one depends on the server:
+
+- **Before 0.21.3**, Hermes doesn't send these questions as JSON-RPC requests to every client on a chat. If one reaches the app, it answers "method not found" (`-32601`), so the agent goes on at once instead of waiting.
+- **0.21.3 and later** send each question to every client that has the chat open, and the first answer settles it for all of them, an error included. The app leaves the question unanswered, so the official app can still show it. Questions that only the window showing the chat can answer (`preview.read`, `preview.act`, `terminal.read`, `window.read`, `theme.apply`, `tour`) get code `4404`, but only when the `client.capabilities` answer says `declines_not_shown: true` (0.21.6 and later). Hermes counts that code as a decline, not as an answer. Before 0.21.6, a `4404` would settle the question like any other error, so those get no answer either.
+
+When no other client answers, the reply keeps running until Hermes stops waiting or the owner presses Stop, which withdraws the question. Hermes stops waiting after 300 s at most for these kinds (120 s for a password manager's master password). From 0.21.6, a window-owned question that every client declines with `4404` ends at once. Before 0.21.6, it waits for its deadline.
+
+## Answering Approvals
+
+Needs `approval.respond` on `/api/ws`. Hermes `bf0203a` and every Hermes that sends `approval` requests (from `ebe8cda8ea`) has it. An answer sent that way settles the Approval in Hermes's queue, and Hermes then withdraws the card from every other app that has the chat open (`request.cancel`). A plain reply to Hermes's request settles it for this app alone, so another app keeps showing the card. No read checks it. While Settings → Diagnostics is open, it sends `approval.respond` with `__hermes_chat_probe__` as the session and request id and `deny` as the choice. At `f0d94882` (`tui_gateway/methods_prompt.py`), Hermes looks the session id up, then looks for a live session waiting on that request id or stored under that session id, finds none, and answers "session not found" (4001) before settling anything; it logs one warning line. That answer means Hermes has the method. A Hermes without it answers "method not found". Alongside, the check reads the profile's `GET /api/config` for `dashboard.turn_isolation`. With turn isolation on (below), `approval.respond` doesn't reach a waiting Approval, so the row says Not supported and the app answers in a plain reply. With it off, or not named in the config, the row says Supported. When the config can't be read, the row says Unknown and why (ADR 0169). A Hermes that answers "method not found" gets the plain reply, then and from then on. Another app's card then stays up until Hermes next lists the chat as not waiting (`session.active_list`), and this app closes its own cards the same way when an older app answers in a plain reply. It does that, and reads an `approval.respond` that settled nothing as answered elsewhere, only for a card that Hermes acknowledged as waiting in its own queue (`approval.received`). With turn isolation (`dashboard.turn_isolation`), the request waits in a child process that neither method sees. Hermes then acknowledges nothing, so the card stays up until Hermes withdraws it or the turn ends, and the answer also goes as a plain reply, which Hermes passes on to the child.
+
+## Several live connections
+
+A background connection (ADR 0125) works with the server as it is; it adds no endpoint. What it can show depends on the server:
+
+- **`session.active_list`** gives its running and waiting counts and its last activity. Without it (the call answers `-32601`), the overview shows the connection's status and Unread chats only, and says that this Hermes doesn't report running work.
+- **Approval cards** reach it only for chats it held while it was the target, since a client gets a chat's requests only once it has attached to it. On 0.21.6 and later those chats are shared: the official app sees the same card, and the first answer settles it. The app attaches a background connection to no new chat on any version yet, so another waiting chat shows as an Inbox entry with no card until it is opened. Before 0.21.6, attaching would move the chat from whichever client held it.
+- **Server requests it doesn't show** get no answer at all from a background connection, on every version, so a client that shows them can answer. Only a window-owned request is declined with `4404`, and only when the server says `declines_not_shown: true`.
+- **Without `client.capabilities`** (0.16.0 and older), Hermes sends no Approval cards on any connection, background ones included.
+
+## Chat search
+
+Search (Ctrl+K) needs `GET /api/sessions/search`, which searches one profile's chats for each request and gives at most 100 chats, one hit for each, with no message id. Hermes has had the route since `v2026.4.13`, and `b200f5bc`, `bf0203a` and `f0d94882` all serve it. Checked with `GET /api/sessions/search?q=&profile=`: Hermes answers a blank `q` with `{"results": []}` before it reads its store, so the check searches nothing.
+
+**Everywhere** (ADR 0191) sends that search once for each profile of each live connection, after one `GET /api/profiles` and one `profiles.list` for each connection. At most four of those requests are in flight at once across the connections. Without the route on a server, Search in the profile on screen says it couldn't search, with Hermes's reason, and Everywhere leaves that server's profiles out and says why. Hermes's search takes no date and no model, so Everywhere checks both on the at most 100 chats each profile answered, and says so.
+
+## Projects
+
+Needs the `projects.*` methods on `/api/ws`. Checked with `projects.list`. Without them, the chat list works, and the project menu says that Hermes doesn't support projects and offers no New project.
+
+## Slash commands
+
+Needs `commands.catalog`, `command.dispatch`, and `slash.exec` on `/api/ws`. Checked with `commands.catalog`. Without them, `/steer` and `/context` say that Hermes needs an update. The app's own commands still work.
+
+Running skills from the composer also needs `commands.catalog` to list skills (its `skills` field), and Settings → Skills' `GET /api/skills` and `GET /api/config`. Without any of them, the menus show no skills, "$" opens nothing, and text naming a skill is sent as an ordinary message.
+
+## Standing missions
+
+Needs `session.control.read` and `session.control` on `/api/ws`, the `session.control.update` event, and `/goal` through `command.dispatch` as Hermes's own command. Hermes has all of them from `v2026.9.7` (`session.control.update` from `v2026.9.14`), and they are the same at `b200f5bc`, `bf0203a` and `f0d9488`, so the owner's server has them. Checked with `session.control.read` for a chat id no chat has: "session not found" (4001) means Hermes has the method, and "method not found" (-32601) means it doesn't. The check then reads `commands.catalog`: `/goal` must be listed as `/goal`, and no quick or plugin command may take the name, because `command.dispatch` would run that instead, and `session.control`'s goal actions go through it too. When Hermes can't list its quick and plugin commands, the state is Unknown.
+
+Without it, **Set a goal** doesn't show, typing `/goal` says why, and chats show no goal bar. A canonical gateway address has these methods too, but the app doesn't connect to one (ADR 0174).
+
+Every call needs the chat live on the server, which opening it does. A goal moves only after a turn of a chat live in the dashboard, so with the app closed an idle chat with only a goal closes after 20 seconds, and after a server restart nothing moves it until the chat is opened. Each check runs on the server as Hermes's own user, with no approval, for up to 300 seconds, and the fourth failure in a row pauses the goal; neither limit can be changed from `/goal`. The turn budget is the profile's `goals.max_turns` (read from `GET /api/config`, 20 by default), since Hermes takes no budget for each goal. See ADR 0187.
+
+## The inbox
+
+Needs `session.active_list` on `/api/ws` to show work running in other profiles. Without it, the inbox still lists Unread chats and Failed messages in every profile, and says that it can't see running work elsewhere.
+
+## Memory
+
+Needs the `learning.*` methods on `/api/ws` and `GET /api/profiles/active`. Checked with `learning.detail` for an entry that doesn't exist, which only reads. Without them, Settings → Memory shows a note instead of the editor, and reads or writes nothing.
+
+## Toolsets
+
+Needs `GET /api/tools/toolsets`. Without it, Settings → Toolsets shows a note instead of the list.
+
+The switches also need `PUT /api/tools/toolsets/{name}`. Settings → Toolsets and Settings → Diagnostics each check it when they open, with a `PUT` for `__hermes_chat_probe__`, a name no toolset has, and `enabled: "probe"`, which isn't true or false. Hermes refuses the body (422) before the route runs, so no toolset changes (`toggle_toolset` in `hermes_cli/web_routers/tools.py` at `f0d94882`; ADR 0021, ADR 0169). Without the route, Settings → Toolsets shows each toolset's state without switches.
+
+## Persona
+
+Needs `GET` and `PUT /api/profiles/{name}/soul`. Checked with the `GET`. Without them, Settings → Persona shows a note instead of the editor.
+
+## Clone profile
+
+Needs `POST /api/profiles`, which isn't checked ahead: the Clone dialog sends it only when the owner clones. A fresh clone needs its `soul`, `description` and `provider`/`model` fields (Hermes `f0d94882`). An older Hermes that ignores one of them makes the profile without it, and the dialog's read-back shows that category as not copied. Without the route Hermes answers 405, and the dialog says the server can't create profiles. Deleting a clone needs `DELETE /api/profiles/{name}`.
+
+## Profiles
+
+Needs `GET /api/profiles` for Settings → Profiles, checked with that read; without it the tab shows a note in its place. Each change has its own route, none checked ahead, since a check never writes: `POST /api/profiles` (New profile), `PATCH /api/profiles/{name}` (rename, and `default`'s display name), `PUT /api/profiles/{name}/description`, `POST /api/profiles/{name}/describe-auto` (Write for me), `PUT /api/profiles/{name}/model` and `DELETE /api/profiles/{name}` (Hermes `f0d94882`). A Hermes that answers one of them with no such route (its 404, or a 405) has that change disabled for the rest of the sign-in, with the route named in the tab and in diagnostics; the others still work. Check again in diagnostics lets it be tried again.
+
+The Bots view's Edit bot, Pin and Hide need two methods on `/api/ws`, also not checked ahead: `profiles.configure` with `ui_meta` and `ui_meta_expected_revisions` (a bot's name in Bot Mode, colour, Pin and Hide), and `profiles.set_asset` (its picture, which needs both). A Hermes that answers one with "method not found" has only those entries turned off, with the method named, and still shows its bots. `profiles.list` must report `ui_meta_revisions` in its rows: a Hermes that doesn't can't check a write against another client's, so the app sends none and says so (Hermes `f0d94882` reports them).
+
+## Provider keys
+
+Settings → Providers and Setup's key step need `GET /api/env`, which lists each provider's key as a row with `provider`, `is_password`, `channel_managed`, `is_set` and a redacted preview. Checked with that `GET`. Without it, both show a note that this server doesn't let Highwing set provider keys, and offer no change; the keys are set on the server instead.
+
+Adding or replacing a key also needs `POST /api/providers/validate` and `PUT /api/env`. Without the check route, Hermes answers an error and the key isn't saved. A check that can't reach the provider still saves the key, and says so.
+
+## Subscription sign-ins
+
+Settings → Providers' Subscription sign-ins need `GET /api/providers/oauth?profile=`, checked with that `GET` when the tab opens (ADR 0133). Without it (`404 Not Found` or `405`), the section says this server doesn't let Highwing sign in to subscription providers, and offers no change; sign in on the server with `hermes auth add` instead. Any other failure offers Try again.
+
+Signing in needs `POST /api/providers/oauth/{id}/start`, `GET /api/providers/oauth/{id}/poll/{session}` with `wait`, and `DELETE /api/providers/oauth/sessions/{session}` to cancel. Hermes at `bf0203a` runs a device-code sign-in for `nous`, `openai-codex`, `minimax-oauth` and `xai-oauth`. `anthropic`, `claude-code`, `qwen-oauth` and `copilot-acp` are `external`: Hermes has no route to sign in to them, so the screen shows the command to run on the server. A Hermes whose poll answers at once, without waiting, is asked at most every 2 seconds. Signing out needs `DELETE /api/providers/oauth/{id}`, offered only when Hermes lists the provider as `disconnectable`; otherwise the screen shows Hermes's reason.
+
+## Custom endpoints
+
+Settings → Providers' Custom endpoints need `GET /api/providers/custom-endpoints?profile=`, checked with that `GET` when the tab opens (ADR 0133). Without it, the section says this server doesn't let Highwing manage custom endpoints. Adding one needs `POST /api/providers/custom-endpoints/validate` and `POST /api/providers/custom-endpoints`; using one as the default needs `POST …/{id}/activate`, and removing one `DELETE …/{id}`. The main model's own `base_url` shows in Hermes's list as a `direct-config` row, which these routes can't activate or remove, so the screen leaves it out; Settings → Model shows it.
+
+Removing a key needs `DELETE /api/env` with `{"key"}`, which Hermes `bf0203a` has. It isn't checked ahead. A Hermes without it answers 405, since `/api/env` still exists for the other methods, and the removal fails with that answer and changes nothing. A 404 is how Hermes says the key isn't set, which counts as removed, and the app reads `GET /api/env` again either way: a key still set is reported as one Hermes still lists.
+
+## Skills
+
+Needs `GET /api/skills`, and `PUT /api/skills/toggle` and `/api/skills/content` to change skills. Checked with the `GET`. Without it, Settings → Skills shows a note instead of the list.
+
+## Server files
+
+Needs the dashboard's managed-files routes, `GET /api/files` and `GET /api/files/read`. Checked with `GET /api/files`. Without them, the Server files screen shows a note instead of the browser, and nothing is uploaded or saved.
+
+## Undoing a reply's file changes
+
+Needs `rollback.list`, `rollback.diff` and `rollback.restore` on `/api/ws`. Hermes `bf0203a` and `f0d9488` have them (`tui_gateway/methods_tools.py:1123`). Checked with `rollback.list` with `__hermes_chat_probe__` as the session: Hermes answers "session not found" (4001) when it has the method, and "method not found" when it doesn't. Alongside, the check reads the profile's `GET /api/config` for `checkpoints.enabled`, and the Diagnostics row says whether it is on. Hermes leaves it off by default and takes checkpoints only with it on. `HERMES_TUI_CHECKPOINTS` on the server overrides it, which only a chat's own `rollback.list` shows. Each method needs the chat's live session. Before the files-changed chip shows under a reply, the app sends `rollback.diff` with `__hermes_chat_probe__` as the hash, once per live session. For a chat whose terminal runs in a container, Hermes answers 5022 ("Checkpoints are not taken for terminal.backend=…"), and for one on the host, an empty diff without running git. Without the methods, or for a chat in a container, the chip doesn't show. With checkpoints off, it says so, and the Preview says how to turn them on. Undo restores one file per `rollback.restore`, with `file_path`, and never the whole folder, which would also drop the chat's newest message (ADR 0180). The canonical gateway answers the same methods, but the app doesn't connect to it.
+
+## Scheduled jobs
+
+Needs the cron routes under `/api/cron/`. Checked with `GET /api/cron/jobs`. To run jobs, the profile's gateway must also be running on the server, which the app can't check. Without the routes, the Scheduled jobs screen shows a note instead of the list.
+
+## Automations
+
+Needs the webhook routes under `/api/webhooks`. Checked with `GET /api/webhooks`. Without them, the Automations screen shows a note instead of the list. A Hermes whose list doesn't name the `webhooks/1` contract keeps fewer fields per route; the Automations screen says which.
+
+## Outputs
+
+Needs `GET /api/fs/list`, and `GET /api/sessions/{id}/messages` with tool rows. Checked with `GET /api/fs/list`. The Outputs screen is gone (ADR 0170). The capability stays because extensions can name `outputs` in `needs` (ADR 0126): without `fs/list`, such an extension shows what is missing instead of running.
+
+## Work
+
+Needs the dashboard's kanban plugin (`plugins/kanban/dashboard/plugin_api.py`), under `/api/plugins/kanban`. Checked with `GET /api/plugins/kanban/boards`. The Work page reads `GET board` and `GET workflow` for the current board, and `GET tasks/{id}` for a task's sheet. It changes the board with `PATCH tasks/{id}` (an edit or a move), `POST tasks` (a new task, with an `idempotency_key`) and `POST tasks/{id}/comments`. Without the plugin, the Work button doesn't show, and a board read that answers 404 shows a note asking for the plugin to be turned on. The same plugin tells the chat list which tasks a chat dispatched.
+
+Planning on the Work page (ADR 0179) uses more of the same plugin's routes. Each part is its own feature in Diagnostics, and each hides only when Hermes is found to lack its own route. The rest of the page stays.
+
+| Feature | Routes | Checked with | Without it |
+| --- | --- | --- | --- |
+| Work dispatch settings | `GET orchestration` | That read: an answer with a true or false `auto_decompose` | The Work page has no Dispatch line. |
+| Work bot and model pickers | `GET model-options`, `GET assignees`, `GET profiles`, and `PATCH tasks/{id}` with `assignee`, `model_override`, `provider_override` or `clear_model_override` | `GET model-options`, which answers `providers` (an empty list when Hermes can't build the catalog: the sheet then takes a typed model) | A card's sheet has no Bot and model pickers. Edit still sets the assignee. |
+| Work links | `POST links {parent_id, child_id}` and `DELETE links?parent_id=&child_id=` | In Diagnostics, `POST links` from a task named `__hermes_chat_probe__` to itself, which Hermes refuses (400) before it reads the board | A card's sheet has no Waits on and Then lists. The Graph view still draws links, since it reads them from `GET tasks/{id}` (`links` and `link_tasks`) and the board's `link_counts`. |
+| Work estimate | `POST estimate {title, body}` and `POST tasks/{id}/estimate` | In Diagnostics, `POST estimate` with an empty title, which Hermes answers `ok: false` before asking any model | New task and a card's sheet offer no token guess. |
+| Work reclaim | `POST runs/{id}/terminate {reason}` | In Diagnostics, `POST runs/0/terminate`, which Hermes answers 404 "run 0 not found" before changing anything. A plugin without the route answers a bare 404 "Not Found" | A running card's sheet shows its run but offers no Reclaim. |
+| Work stop and reassign | `POST tasks/{id}/reassign {profile, reclaim_first, reason}` | In Diagnostics, a reassign of a task named `__hermes_chat_probe__` with `reclaim_first: false`, which Hermes refuses (409) | A running card's sheet shows its run but offers no Stop or Reassign. The card can still be moved, and the Block prompt says that its bot keeps working. |
+
+A card's sheet shows its bot's run (ADR 0192) from reads that need no feature of their own. The run, its start and its heartbeat come from `runs` and `events` in `GET tasks/{id}`. The bot's chat is the `session_id` of the run's `owner_admitted` event, read with `GET /api/sessions/{id}?profile=` for its token counts and `GET /api/sessions/{id}/messages?profile=&order=latest&limit=6` for its last rows, under the run's profile. On a Hermes that writes no `owner_admitted` event, the sheet says that Hermes hasn't named the run's chat. Stop sends the reassign with an empty `profile`, then `PATCH tasks/{id}` to block the card, then `PATCH tasks/{id}` to give it back to its bot. The page doesn't use `GET workers/active`, `GET runs/{id}/inspect`, the task log or `POST tasks/{id}/reclaim`.
+
+Diagnostics also shows the server's `kanban.auto_decompose` and `kanban.auto_promote_children` (from `GET orchestration`) and the profile's `kanban.review_dispatch` (from `GET /api/config`). The relay takes `POST links`, `POST estimate`, `POST tasks/{id}/estimate`, `POST runs/{id}/terminate` and `POST tasks/{id}/reassign` only with the fields the page sends (`kanban_write`). The plugin is the same at Hermes `b200f5bc`, `bf0203a` and `f0d9488`. The run routes and their answers were checked at `bf0203a`.
+
+## Sign-in methods
+
+The sign-in screen and Setup read the dashboard's public `GET /api/status` (`auth_required`, `auth_providers`, `auth_flows`) and, when `auth_flows` lists `native_pkce`, `GET /api/auth/providers`, before anything signs in (ADR 0058). Password sign-in needs a provider listed with `supports_password`, or `basic` in `auth_providers` on a Hermes without the providers list; every Hermes checked has `basic`. Token sign-in needs the `session-token` provider, in Hermes from `2edfd0d` (2026-10-28), started with `HERMES_DASHBOARD_SESSION_TOKEN` set; it was checked live at `f0d94882`. The owner's server at `bf0203a` doesn't have it, so the app doesn't offer Token there. A status that can't be read, or that lists no method the app supports, leaves the password, as before. Browser sign-in through OIDC or Nous Portal, which `auth_flows: native_pkce` advertises, isn't built yet.
+
+## Bot Mode
+
+Needs `profiles.list` on `/api/ws` with each profile's Bot Chat in its rows (`canonical_session`, which is `null` for a profile without one), and `session.list` with `title` and `include_hidden` to look a Bot Chat up by its title. Checked with `profiles.list`. Hermes `f0d94882` has both. An older Hermes without `profiles.list`, or one whose rows don't report a Bot Chat, has no Bot Mode: the Bots button doesn't show, and diagnostics says why. To start a Bot Chat, the app also uses `session.create` with `hidden` and `session.title`.
+
+## Subagents
+
+Needs the `subagent.*` events on a chat's session (`spawn_requested`, `start`, `progress`, `tool`, `thinking`, `complete`, with `subagent_id` and `parent_id`), and `subagent.list`, `subagent.tail`, `subagent.steer` and `subagent.interrupt` on `/api/ws`. Hermes `f0d94882` has all of them. These methods need a chat's live session, so diagnostics can't check them by reading. The capability is unknown until a chat opened on the connection lists its subagents. Without `subagent.list`, the Subagents panel still shows what the events say, says that it can't check what happened while the app was disconnected, and has no Steer or Stop. A Hermes whose events carry no `subagent_id` shows its subagents side by side, by their `delegate_task` call, without Steer or Stop.
+
+## Subagents in chats not opened
+
+Needs `subagent.roster` on `/api/ws`, which counts the background subagents and background processes running for each chat of a profile, with no chat open. Hermes `f0d94882` has it, and 0.16.0 doesn't. Checked with `subagent.roster`. The app reads it with `session.active_list`, so a chat not opened since launch stays in Working while its background subagents run (ADR 0096). Without it, only a chat opened on the connection stays in Working while they run. Any other chat goes to the Inbox when its reply ends, as before.
+
+## Budgets
+
+Usage → Budgets needs nothing new for a budget on the server, a profile or a project: it adds up the chat totals Usage analytics already reads from `GET /api/sessions` (ADR 0026). A budget on a model also needs `GET /api/analytics/models`, Hermes's spending for each model it called, counted per call. Hermes `bf0203a` and `f0d9488` have it. Checked with `GET /api/analytics/models?days=1`. Without it, a model budget shows no figure and sends no alert, and says why. The route takes only whole days back from now, so a model budget counts the last 24 hours, 7 days or 30 days. Its sums include Hermes's helper tasks and subagent runs, have no cache-write count, and count a model Hermes can't price as $0 (ADR 0190).
+
+## Run view
+
+The Run view under a reply draws its turn as steps (ADR 0178). It needs nothing the app doesn't already read: the session events on `/api/ws` (`message.start`, `message.delta`, `reasoning.delta`, `tool.start`, `tool.complete`, `session.usage`, `status.update`, `request.cancel`, `approval.cancelled`, `message.complete`, `error`), the Approval and Question requests, `GET /api/sessions/{id}` for the chat's cost, `GET /api/sessions/{id}/messages` for a reply the app didn't watch, and `GET /api/config` for `display.tool_progress`. Hermes `bf0203a` and `f0d9488` have all of them, so it adds no capability of its own. Settings → Diagnostics shows two facts for it under Flight recorder.
+
+- **Tool steps.** With `display.tool_progress` set to `off`, Hermes sends tool events only for file edits, `delegate_task`, `clarify`, a few card tools and a failed call's completion. A run the app watched then misses the other tool steps, and the Run view says so. A run read from stored history still has them. A `HERMES_TUI_TOOL_PROGRESS` setting on the server overrides the config, and the app can't see it.
+- **Turn ids.** `bf0203a` sends no `turn_id` on `message.start`; `f0d9488` does. The recorder pairs a turn's events by their order on the session, which works with both, and Diagnostics shows which this Hermes is once a reply starts.
+- **Drops.** Hermes replays no events when a chat is resumed after a dropped connection. The resume says whether the turn still runs (`running`) and which requests it still waits on (`open_requests`), so the Run view shows the time between as Not heard, adds the Questions Hermes asked meanwhile, and draws a turn that finished meanwhile from the stored rows.
+
+What it can't show, on any Hermes: no event carries a server time, so every start and end is when the app heard it. Only a tool's `duration_s` is measured by Hermes. A model call has no event, so its edges and tokens are inferred from the events around it and the `session.usage` counters, sent at most once a second. Cost is kept per chat, so a turn's cost is the change across it, and a step's isn't known. A tool call has no failure flag, so failure is judged from its result. A retry that recovered leaves no trace. A stored row has only the time its step ended. Each of these is marked or said in the view.
+
+## Versions checked
+
+Checked live on 2026-11-04 with throwaway dashboards holding no real data (`src/hermes/capabilities.live.test.ts`):
+
+- Hermes at upstream `74b2ed6` (it reports 0.21.5): every feature is supported, and it advertises the `per_session_exclusive_submit` flag.
+- Hermes 0.16.0 at `3705625`: chats, Toolsets, Persona, Skills, Scheduled jobs, Automations, slash commands, and the inbox are supported. Approvals, Projects, Memory, Server files, and Outputs are not supported, and it has no `/api/health` or feature flags. Sign-in with a username and password works.
+- The deployed `bf0203a` was not reachable for this check; earlier features were developed against it.
+
+The automated tests use a fake Hermes that can answer as either of those, or leave out any route or method.
+
+### Limits
+
+- A check proves that a route answers. It doesn't prove that every field the app reads is there. A screen still checks what it reads, and says when an answer has an unexpected shape.
+- A route that a gateway or proxy in front of the dashboard blocks can look missing (a `404`) or unreachable (a `5xx`). Check the gateway if a feature your Hermes should have shows as not supported.
+- Toolset switches and Answering Approvals can't be checked by reading. They stay unknown until Settings → Diagnostics or, for the switches, Settings → Toolsets opens. Answering Approvals shows Not supported on a Hermes with turn isolation, where `approval.respond` doesn't reach the waiting Approval, and Unknown when the profile's config can't be read to tell.
+- Memory can be edited only for the profile the dashboard runs as. That limit isn't a missing feature, so diagnostics doesn't show it; Settings → Memory explains it.
+- The canonical protocol can't be shown in diagnostics, because the app doesn't connect to it.
