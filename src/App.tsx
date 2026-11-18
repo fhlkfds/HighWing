@@ -56,9 +56,9 @@ import { desktopLinks, type LinkInbox } from "./hermes/tauriLinks";
 import { ChatLinkNotice, type LinkNoticeView } from "./ui/ChatLinkNotice";
 import { Inbox } from "./ui/Inbox";
 import { BotList, useBotActions, type BotEditWiring } from "./ui/Bots";
-import { policyOf } from "./hermes/chatKind";
+import { chatKind, policyOf } from "./hermes/chatKind";
 import { jobRunTitle } from "./hermes/cronJobs";
-import { botActivity, botsWaiting, isBotChat, newInBotChatNote, type Bot } from "./hermes/bots";
+import { botActivity, botsWaiting, newInBotChatNote, type Bot } from "./hermes/bots";
 import { blocksRestore, inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxAcks, type InboxEntry } from "./hermes/inbox";
 import { searchEverywhere, type EverywhereFilter, type EverywhereOutcome, type EverywhereRow } from "./hermes/everywhere";
 import { LiveConnections, attention as attentionOf, withoutServer, type ChatRef, type LiveSummary } from "./hermes/liveConnections";
@@ -2360,11 +2360,11 @@ export function Main({
   useEffect(() => {
     beforeBotChat.current = null;
   }, [profile]);
-  const onBotChat = !!shownChat && isBotChat(shownChat);
+  const onBotChat = !!shownChat && chatKind(shownChat) === "bot";
   /** `visiting`: what becomes of a bot visit (ADR 0203); none ends it, here or with the switch to the bot's profile. */
   const openBot = (b: Bot, then: "open" | "new", visiting?: BotVisit) => {
     guard(() => {
-      if (then === "open" && b.profile === profile && !onBotChat) beforeBotChat.current = active.chatId;
+      if (then === "open" && b.profile === profile && !(shownChat && policyOf(shownChat).ofBot)) beforeBotChat.current = active.chatId;
       if (b.profile !== profile) void switchProfileNow(b.profile, { visit: visiting });
       else setVisit(visiting);
       // Anything the owner opens or switches to after this, before the Bot Chat opens, wins over it (`navGen`).
@@ -2410,7 +2410,7 @@ export function Main({
   const startNewChat = () => (visit ? goHome(visit, "new") : newChat());
   const pickMode = (mode: ChatListMode) => (mode === "chats" && visit ? goHome(visit, "chats") : setChatListMode(mode));
   useEffect(() => {
-    if (visit && shownChat && !isBotChat(shownChat)) setVisit(undefined);
+    if (visit && shownChat && !policyOf(shownChat).ofBot) setVisit(undefined);
   }, [visit, shownChat]);
   useEffect(() => hermes.setVisitHome(visit?.home), [hermes, visit?.home]);
 
@@ -2944,7 +2944,7 @@ export function Main({
           else {
             const back = beforeBotChat.current;
             beforeBotChat.current = null;
-            if (back && chats.some((c) => c.id === back && !isBotChat(c))) openChat(back);
+            if (back && chats.some((c) => c.id === back && !policyOf(c).ofBot)) openChat(back);
             else newChat();
           }
           return;
@@ -3028,7 +3028,7 @@ export function Main({
         pane={p.key}
         tabs={p.tabs.map((id) => {
           const c = id === null ? undefined : chats.find((c) => c.id === id);
-          const title = c && isBotChat(c) && shownName !== undefined ? shownName : (c?.title ?? "New chat");
+          const title = c && chatKind(c) === "bot" && shownName !== undefined ? shownName : (c?.title ?? "New chat");
           return { id, title, running: c?.running, unread: c?.unread };
         })}
         current={p.chatId}
@@ -3372,7 +3372,7 @@ export function Main({
                   pictures={botPictures}
                   activity={activityOf}
                   profile={profile}
-                  current={!covering && shownChat && isBotChat(shownChat) ? profile : undefined}
+                  current={!covering && shownChat && chatKind(shownChat) === "bot" ? profile : undefined}
                   leaving={leavingNote(profile, chats, words.profiles.leaving)}
                   onOpen={visitBot}
                   onNewChat={(b) => openBot(b, "new")}
@@ -4364,7 +4364,7 @@ function ChatView({
     refreshSkills: skillCommands.refresh,
     guide: caps.caps.commands.state === "unsupported" ? () => openGuide(guideUrl("commands")) : undefined,
     why: (def) => {
-      if (def.name === "help" || (def.name === "new" && !isBotChat(chat))) return undefined;
+      if (def.name === "help" || (def.name === "new" && !policy.ofBot)) return undefined;
       // In a Bot Chat, /new compacts it, which needs the chat open on Hermes and no reply running.
       if (def.name === "new") {
         if (status !== "connected") return "Not connected to Hermes.";
@@ -4376,8 +4376,8 @@ function ChatView({
       if (status !== "connected") return "Not connected to Hermes.";
       if (def.name === "delete" && chat.running) return "A chat with a reply running can't be deleted.";
       // A Bot Chat's title is its identity, and it is its bot's one chat (ADR 0066).
-      if (def.name === "rename" && isBotChat(chat)) return "A Bot Chat's name is how Hermes finds it, so it can't be renamed.";
-      if (def.name === "delete" && isBotChat(chat)) return "A Bot Chat is its bot's one continuous chat, so Highwing doesn't delete it.";
+      if (def.name === "rename" && policy.rename === "none") return "A Bot Chat's name is how Hermes finds it, so it can't be renamed.";
+      if (def.name === "delete" && !policy.remove) return "A Bot Chat is its bot's one continuous chat, so Highwing doesn't delete it.";
       if (def.scope === "local") return undefined;
       if (serverCommands.state === "loading") return "Checking whether this Hermes has it…";
       if (serverCommands.state === "failed") return `Couldn't check whether this Hermes has it: ${serverCommands.reason}`;
@@ -4401,7 +4401,7 @@ function ChatView({
       try {
         if (def.name === "new") {
           // A Bot Chat is one continuous conversation: /new compacts it instead, as in Hermes's desktop (ADR 0066).
-          if (isBotChat(chat)) {
+          if (policy.ofBot) {
             const res = await hermes.compact(chat.id);
             if (here()) done();
             return newInBotChatNote(res);

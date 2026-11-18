@@ -17,8 +17,7 @@ import { ReferenceChips } from "./ReferenceChips";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
-import { isBotChat } from "../hermes/bots";
-import { policyOf } from "../hermes/chatKind";
+import { CHAT_POLICY, chatKind, policyOf } from "../hermes/chatKind";
 import { DeleteChatDialog } from "./DeleteChat";
 import { ExportChatDialog, type ExportMode } from "./ExportChat";
 import { QueuePanel, type QueueApi } from "./Queue";
@@ -292,8 +291,8 @@ function MoreMenu({
   const [at, setAt] = useState<{ x: number; y: number }>();
   const close = useCallback(() => setAt(undefined), []);
   const button = useRef<HTMLButtonElement>(null);
-  const { manage, link } = policyOf(chat);
-  const archive = manage ? archiveAction(chat) : undefined;
+  const { organize, remove, link } = policyOf(chat);
+  const archive = organize ? archiveAction(chat) : undefined;
   const [askDelete, setAskDelete] = useState(false);
   const [exporting, setExporting] = useState<ExportMode>();
   const noDelete = !onDelete;
@@ -319,7 +318,7 @@ function MoreMenu({
       <button
         ref={button}
         className={`icon-btn ${at ? "on" : ""}`}
-        title={`More actions: ${["export", "share", link && "copy link", manage && pin && "pin", archive, manage && onDelete && "delete"].filter(Boolean).join(", ")}`}
+        title={`More actions: ${["export", "share", link && "copy link", organize && pin && "pin", archive, remove && onDelete && "delete"].filter(Boolean).join(", ")}`}
         aria-label="More"
         aria-haspopup="menu"
         aria-expanded={!!at}
@@ -342,11 +341,11 @@ function MoreMenu({
           {/* A Bot Chat is opened from its bot's row, found by its title (ADR 0066): no link to it by id, and nothing
               that would retire it, which would leave its bot to start another. */}
           {onCopyLink && link && item("Copy chat link", <Link2 size={15} />, onCopyLink, "Copy a link that opens this chat in Highwing on this computer")}
-          {pin && manage && !inArchived(chat) && <PinItem pin={pin} onClose={close} />}
+          {pin && organize && !inArchived(chat) && <PinItem pin={pin} onClose={close} />}
           {onSettle &&
             archive &&
             (archive === "unarchive" ? item("Unarchive", <ArchiveRestore size={15} />, () => onSettle(false)) : item("Archive", <Archive size={15} />, () => onSettle(true)))}
-          {onDelete && manage && (
+          {onDelete && remove && (
             <>
               <div className="menu-sep" role="separator" />
               {item("Delete chat…", <Trash2 size={15} />, () => setAskDelete(true), "Delete this chat in every Hermes client. This can't be undone.", true)}
@@ -551,7 +550,8 @@ export function ChatPane({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const words = useLocale().chat;
-  const botOfChat = isBotChat(chat) ? bot : undefined;
+  const kind = chatKind(chat);
+  const botOfChat = kind === "bot" ? bot : undefined;
   const keys = useBindings();
   const labels = (chords: readonly Chord[]) => chords.map(chordLabel).join(" or ");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -904,7 +904,7 @@ export function ChatPane({
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
   const waiting = chat.items.find(isWaiting);
-  const policy = policyOf(chat);
+  const policy = CHAT_POLICY[kind];
   const { jobId } = chat;
   // The streaming block is the chat's last item, so it is in the last chunk that holds more than side questions.
   let liveChunk = chunks.length - 1;
@@ -921,7 +921,7 @@ export function ChatPane({
           {chat.source !== "app" && <SourceIcon source={chat.source} size={13} />}
           {botOfChat && <BotFace bot={botOfChat} size="sm" />}
           <span translate={botOfChat ? "no" : undefined}>{botOfChat?.name ?? chat.title}</span>
-          {isBotChat(chat) ? (
+          {kind === "bot" ? (
             <span className="badge" title={words.botChatTip}>
               {words.botChat}
             </span>

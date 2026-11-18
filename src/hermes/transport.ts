@@ -66,7 +66,6 @@ import {
   blockFor,
   blockOf,
   configureParams,
-  isBotChat,
   isBotChatTitle,
   lacksPictureKeys,
   lookOf,
@@ -136,6 +135,7 @@ export const APP_SOURCE = "gui";
 
 /** Why a Bot Chat can't be renamed here (ADR 0066). */
 const BOT_CHAT_RENAME = "A Bot Chat's name is how Hermes finds it, so it can't be renamed.";
+const THREAD_RETITLE = "A thread is named for its topic, so Hermes doesn't write a title for it. Rename it instead.";
 /** Hermes runs only the job in a Job run's session, and stores a refusal in the run's history if it is sent a message. */
 const JOB_RUN_NO_SESSION = "A scheduled job's run can't be continued here.";
 const JOB_RUN_READ_ONLY = "This chat is a run of a scheduled job, so it's read-only here.";
@@ -3699,7 +3699,7 @@ export class Hermes {
       running: true,
       updatedAt: Date.now(),
       // A new chat is named by its first message until Hermes titles it; a Bot Chat keeps its title, its identity.
-      title: c.items.length === 0 && c.runtimeId && !isBotChat(c) ? (text || attachments[0]?.name || c.title).slice(0, 48) : c.title,
+      title: c.items.length === 0 && c.runtimeId && !policyOf(c).ofBot ? (text || attachments[0]?.name || c.title).slice(0, 48) : c.title,
       items: [...c.items, user],
     }));
     // A chat's first message names it, and the chat goes in the saved list then, as Hermes has no row for it yet: a
@@ -3842,7 +3842,7 @@ export class Hermes {
    */
   async delete(chatId: string): Promise<boolean> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
-    if (!chat || chat.running || policyOf(chat).session === "stored") return false;
+    if (!chat || chat.running || !policyOf(chat).remove) return false;
     const profile = this.profile;
     this.deleted.set(profile, chatId, true);
     this.recorder.forget(profile, chatId);
@@ -3898,8 +3898,8 @@ export class Hermes {
     if (title === from) return from;
     // A Bot Chat's title is how Hermes finds it, and a chat renamed to the title would become a bot's one chat (ADR 0066).
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
-    if (chat && isBotChat(chat)) throw new Error(BOT_CHAT_RENAME);
     if (this.isStored(chatId)) throw new Error(JOB_RUN_READ_ONLY);
+    if (chat && policyOf(chat).rename === "none") throw new Error(BOT_CHAT_RENAME);
     if (isBotChatTitle(title)) throw new Error(`“${BOT_CHAT_TITLE}” is the name Hermes gives each bot's one chat. Pick another name.`);
     const profile = this.profile;
     // Read in this order, a rename elsewhere either shows in the title or makes the revision stale.
@@ -3939,8 +3939,8 @@ export class Hermes {
   async regenerateTitle(chatId: string): Promise<string> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (!chat) throw new Error("This chat isn't in the list.");
-    if (isBotChat(chat)) throw new Error(BOT_CHAT_RENAME);
     if (policyOf(chat).session === "stored") throw new Error(JOB_RUN_READ_ONLY);
+    if (policyOf(chat).rename !== "title") throw new Error(policyOf(chat).rename === "topic" ? THREAD_RETITLE : BOT_CHAT_RENAME);
     const from = chat.title;
     const profile = this.profile;
     // Tool rows count toward each page, so older pages are read until the last messages are all in.
