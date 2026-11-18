@@ -2552,8 +2552,13 @@ export class Hermes {
       this.threadEdited(profile, (threads) => threads.filter((t) => t.title !== thread.title));
       throw new Error(`Hermes no longer has the thread “${threadTopic(thread.title)}”.`);
     }
+    const revision = await this.revision(found.titleId, profile);
+    if ((await this.readTitle(found.titleId, profile)) !== thread.title) {
+      this.threadEdited(profile);
+      throw new Error(`The thread “${threadTopic(thread.title)}” was renamed in another Hermes client. Look at its new name and rename it again.`);
+    }
     try {
-      await this.fencedPatch(found.titleId, profile, { title }, await this.revision(found.titleId, profile));
+      await this.fencedPatch(found.titleId, profile, { title }, revision);
     } catch (e) {
       if (titleInUse(e)) throw new Error(`This bot already has a thread on “${threadTopic(title)}”.`);
       throw e;
@@ -3012,7 +3017,7 @@ export class Hermes {
 
   private async freeThreadTitle(profile: string, topic: string): Promise<ThreadTitle> {
     const base = threadTitle(topic);
-    const taken: string[] = [];
+    const taken = (this.snapshot.threads[profile]?.threads ?? []).map((t) => t.title as string);
     for (let round = 0; round < FREE_TITLE_ROUNDS; round++) {
       const title = freeTitle(base, taken);
       if (!(await this.threads.find(profile, title))) return title;

@@ -264,6 +264,20 @@ describe("renaming and deleting a thread", () => {
     await expect(hermes.regenerateTitle(id)).rejects.toThrow("A thread is named for its topic");
   });
 
+  it("renames nothing when another client renamed the thread after it was looked up", async () => {
+    const { server, hermes } = await signedIn();
+    const list = server.handlers["session.list"];
+    let renamedElsewhere = false;
+    server.handlers["session.list"] = (r) => {
+      list(r);
+      if (renamedElsewhere || r.params.title !== "Bot Thread: Changelog") return;
+      renamedElsewhere = true;
+      server.otherProfiles.scribe.find((s) => s.title === "Bot Thread: Changelog")!.title = "Bot Thread: Changelog draft";
+    };
+    await expect(hermes.renameThread({ profile: "scribe", title: threadTitle("Changelog") }, "Release wording")).rejects.toThrow("was renamed in another Hermes client");
+    expect(threadsOf(server, "scribe").map((s) => s.title)).toEqual(["Bot Thread: Changelog draft"]);
+  });
+
   it("says when the bot already has a thread on the new topic", async () => {
     const { server, hermes } = await signedIn((s) => s.seedThread("scribe", "Release wording"));
     await expect(hermes.renameThread({ profile: "scribe", title: threadTitle("Changelog") }, "Release wording")).rejects.toThrow("This bot already has a thread on “Release wording”.");
@@ -377,6 +391,16 @@ describe("Thread from here", () => {
     const { chatId } = await hermes.threadFromHere(await hermes.previewBranch(botChat, reply()), "VLAN plan");
     expect(forks()).toMatchObject([{ id: chatId, title: "Bot Thread: VLAN plan (2)" }]);
     expect(rpc(server, "session.branch")).toHaveLength(1);
+  });
+
+  it("skips every title the bot's threads already hold, however many", async () => {
+    const { hermes, botChat, reply, forks } = await inBotChat((s) => {
+      s.seedThread("default", "VLAN plan");
+      for (let n = 2; n <= 7; n++) s.seedThread("default", `VLAN plan (${n})`);
+    });
+    await hermes.readThreads(["default"]);
+    const { chatId } = await hermes.threadFromHere(await hermes.previewBranch(botChat, reply()), "VLAN plan");
+    expect(forks()).toMatchObject([{ id: chatId, title: "Bot Thread: VLAN plan (8)" }]);
   });
 
   it("adopts the thread Hermes made when its answer was lost, by its title, though no chat list shows it", async () => {
