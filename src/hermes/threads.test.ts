@@ -121,6 +121,11 @@ describe("shelfOf", () => {
     expect(shelfOf({ sessions: [row("root", "Bot Thread: Backups", { resolved_id: "tip" })] }, "ops", 500, 0).threads[0]).toMatchObject({ rootId: "root", openId: "tip" });
   });
 
+  it("keeps two threads whose titles differ only in case, as Hermes does", () => {
+    const shelf = shelfOf({ sessions: [row("a", "Bot Thread: VLAN plan"), row("b", "Bot Thread: vlan plan")] }, "ops", 500, 0);
+    expect(shelf.threads.map((t) => t.rootId)).toEqual(["a", "b"]);
+  });
+
   it("says the answer filled its window", () => {
     const sessions = [row("a", "Disk usage"), row("b", "Bot Thread: Backups")];
     expect(shelfOf({ sessions }, "ops", 2, 0).capped).toBe(true);
@@ -128,7 +133,7 @@ describe("shelfOf", () => {
   });
 
   it("keeps the first of two rows with one title, and skips rows it can't read", () => {
-    const shelf = shelfOf({ sessions: [row("a", "Bot Thread: Backups"), row("b", "Bot Thread: backups"), null, "x", row("", "Bot Thread: No id")] }, "ops", 500, 0);
+    const shelf = shelfOf({ sessions: [row("a", "Bot Thread: Backups"), row("b", "Bot Thread: Backups"), null, "x", row("", "Bot Thread: No id")] }, "ops", 500, 0);
     expect(shelf.threads.map((t) => t.openId)).toEqual(["a"]);
   });
 

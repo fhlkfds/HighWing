@@ -45,7 +45,10 @@ export function threadTitle(topic: string): ThreadTitle {
   return `${THREAD_PREFIX}${tidy}` as ThreadTitle;
 }
 
-/** `title`, or the first of `title (2)`, `title (3)`… that `taken` lacks. Titles compare without case, as Hermes's do. */
+/**
+ * `title`, or the first of `title (2)`, `title (3)`… that `taken` lacks. Hermes holds titles apart by case, but this
+ * skips a title that differs only in case too, so no two of a bot's threads read alike.
+ */
 export function freeTitle(title: ThreadTitle, taken: readonly string[]): ThreadTitle {
   const held = new Set(taken.map((t) => t.toLowerCase()));
   if (!held.has(title.toLowerCase())) return title;
@@ -97,7 +100,7 @@ export function shelfOf(result: unknown, profile: string, limit: number, at: num
   for (const r of rows) {
     if (!isObj(r)) continue;
     const row = threadOf(r, profile);
-    if (row && !threads.has(row.title.toLowerCase())) threads.set(row.title.toLowerCase(), row);
+    if (row && !threads.has(row.title)) threads.set(row.title, row);
   }
   return { threads: [...threads.values()], at, capped: rows.length >= limit };
 }
