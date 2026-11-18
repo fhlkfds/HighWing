@@ -1,38 +1,37 @@
-import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import rehypeHighlight from "rehype-highlight";
 import katex from "katex";
 import { fromHtmlIsomorphic } from "hast-util-from-html-isomorphic";
 import { toText } from "hast-util-to-text";
 import { SKIP, visit } from "unist-util-visit";
-import type { Element, ElementContent, Root } from "hast";
+import type { Element, ElementContent, Root, RootContent } from "hast";
 import type { VFile } from "vfile";
 import { escapeRe } from "./bits";
-import { remarkMath } from "./markdownMath";
+import { lru } from "./lru";
+import { remarkTranscriptSyntax } from "./markdownSyntax";
 import { findPaths, hrefPath, type PathMention } from "../hermes/paths";
 
-type HastNode = { type: string; value?: string; tagName?: string; properties?: Record<string, unknown>; children?: HastNode[] };
-
-const classes = (node: { properties?: Record<string, unknown> }) => {
-  const className = node.properties?.className;
+const classes = (node: Element) => {
+  const className = node.properties.className;
   return Array.isArray(className) ? className.map(String) : [];
 };
 
+export const languageOf = (code: Element) => classes(code).find((c) => c.startsWith("language-"))?.slice("language-".length);
+
 /** Typeset math is left alone: its text is KaTeX's glyphs and a copy of the TeX for screen readers, not words to find. */
 function rehypeFind(query: string) {
-  return () => (tree: HastNode) => {
+  return () => (tree: Root) => {
     if (!query) return;
     const re = new RegExp(`(${escapeRe(query)})`, "gi");
-    const walk = (node: HastNode) => {
-      if (!node.children) return;
-      node.children = node.children.flatMap((child): HastNode[] => {
+    const walk = (node: Root | Element) => {
+      node.children = node.children.flatMap((child): RootContent[] => {
         if (child.type !== "text" || !child.value) {
-          if (!classes(child).some((c) => c.startsWith("katex"))) walk(child);
+          if (child.type === "element" && !classes(child).some((c) => c.startsWith("katex"))) walk(child);
           return [child];
         }
         return child.value
           .split(re)
-          .flatMap((part, i): HastNode[] =>
+          .flatMap((part, i): ElementContent[] =>
             !part ? [] : i % 2 ? [{ type: "element", tagName: "mark", properties: { className: ["hit"] }, children: [{ type: "text", value: part }] }] : [{ type: "text", value: part }],
           );
       });
@@ -41,27 +40,26 @@ function rehypeFind(query: string) {
   };
 }
 
-const rehypePaths = () => (tree: HastNode) => {
+const rehypePaths = () => (tree: Root) => {
   const data = (m: PathMention) => ({ dataPath: m.written, ...(m.folder && { dataFolder: true }) });
   // A word that runs on into what is beside it is only part of a path: `src/__init__.py` is `src/`, then `init` in
   // bold, then `.py`, and `src/` alone would open the wrong place.
-  const runsOn = (n: HastNode | undefined, side: "before" | "after") => {
+  const runsOn = (n: RootContent | undefined, side: "before" | "after") => {
     if (n?.type === "element") return n.tagName !== "br";
-    const v = n?.type === "text" ? (n.value ?? "") : "";
+    const v = n?.type === "text" ? n.value : "";
     return side === "before" ? /[\p{L}\p{N}_~/.-]$/u.test(v) : /^(?:[\p{L}\p{N}_~/-]|\.[\p{L}\p{N}])/u.test(v);
   };
-  const walk = (node: HastNode, before = false, after = false) => {
-    if (!node.children) return;
-    const where = node.tagName === "code" ? "code" : "prose";
+  const walk = (node: Root | Element, before = false, after = false) => {
+    const where = node.type === "element" && node.tagName === "code" ? "code" : "prose";
     const siblings = node.children;
     const glued = (i: number, side: "before" | "after") =>
       side === "before" ? (i === 0 ? before : runsOn(siblings[i - 1], side)) : i === siblings.length - 1 ? after : runsOn(siblings[i + 1], side);
-    node.children = siblings.flatMap((child, i): HastNode[] => {
+    node.children = siblings.flatMap((child, i): RootContent[] => {
       if (child.type === "text" && child.value) {
         const text = child.value;
         const spans = findPaths(text, where).filter((s) => !(s.start === 0 && glued(i, "before")) && !(s.end === text.length && glued(i, "after")));
         if (!spans.length) return [child];
-        const out: HastNode[] = [];
+        const out: ElementContent[] = [];
         let at = 0;
         for (const s of spans) {
           if (s.start > at) out.push({ type: "text", value: text.slice(at, s.start) });
@@ -71,8 +69,9 @@ const rehypePaths = () => (tree: HastNode) => {
         if (at < text.length) out.push({ type: "text", value: text.slice(at) });
         return out;
       }
+      if (child.type !== "element") return [child];
       if (child.tagName === "a") {
-        const { href, ...rest } = child.properties ?? {};
+        const { href, ...rest } = child.properties;
         const mention = typeof href === "string" ? hrefPath(href) : undefined;
         if (mention) child.properties = { ...rest, ...data(mention) };
       } else if (child.tagName !== "pre" && !classes(child).some((c) => c.startsWith("katex") || c === "language-math")) walk(child, glued(i, "before"), glued(i, "after"));
@@ -81,29 +80,6 @@ const rehypePaths = () => (tree: HastNode) => {
   };
   walk(tree);
 };
-
-function lru<V>(limit: number) {
-  const held = new Map<string, { value: V; weight: number }>();
-  let weights = 0;
-  return {
-    get(key: string): V | undefined {
-      const hit = held.get(key);
-      if (!hit) return undefined;
-      held.delete(key);
-      held.set(key, hit);
-      return hit.value;
-    },
-    set(key: string, value: V, weight: number) {
-      held.set(key, { value, weight });
-      weights += weight;
-      for (const [old, { weight }] of held) {
-        if (weights <= limit) break;
-        held.delete(old);
-        weights -= weight;
-      }
-    },
-  };
-}
 
 // The highlighter is made once: rehype-highlight builds a fresh highlight.js instance, with every grammar to compile
 // again, each time the plugin is attached, and ReactMarkdown attaches its plugins on every render.
@@ -126,9 +102,9 @@ function highlight(code: Element, pre: Element, file: VFile, guessed?: () => voi
     if (guessing(code) && text.length > GUESS_FROM_CHARS) {
       const start: Element = { ...code, properties: { ...code.properties, className: classes(code) }, children: [{ type: "text", value: text.slice(0, GUESS_FROM_CHARS) }] };
       one(start);
-      const language = classes(start).find((c) => c.startsWith("language-"));
+      const language = languageOf(start);
       if (!language) return plain(code);
-      code.properties.className = [...classes(code), language];
+      code.properties.className = [...classes(code), `language-${language}`];
     }
     one(code);
   };
@@ -214,7 +190,7 @@ function rehypeCode(source?: string, guessed?: () => void) {
     });
 }
 
-export const remarkPlugins = [remarkGfm, remarkMath, remarkBreaks];
+export const remarkPlugins = [remarkTranscriptSyntax, remarkBreaks];
 
 const highlightOnly = [rehypeCode(), rehypePaths];
 

@@ -1331,7 +1331,6 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .attach-note { font-size: calc(12rem / 14); color: var(--muted); padding: 0 6px 8px; }
 .offline-note { font-size: calc(12rem / 14); color: var(--muted); padding: 0 6px 8px; }
 .composer-hint { font-size: calc(12rem / 14); color: var(--warn); padding: 0 6px 8px; }
-.capture-note { font-size: calc(12rem / 14); color: var(--muted); padding: 0 6px 8px; }
 /* Slash commands (src/ui/SlashCommands.tsx): in the flow above the composer, so they fit a narrow or split pane. */
 .cmd-menu, .cmd-help, .cmd-note, .cmd-confirm {
   background: var(--raised); border: 1px solid var(--line-2); border-radius: var(--radius); margin-bottom: 8px; font-size: calc(12.5rem / 14);
@@ -1931,7 +1930,6 @@ button.settings-search-tab:hover { color: var(--text); }
 /* Why the item above it does nothing, lined up with its label (link menu, previewContext.tsx). */
 .menu-note { padding: 0 8px 4px 33px; font-size: calc(12rem / 14); color: var(--faint); }
 
-/* Screenshot settings: the shortcut recorder and the desktop shortcut examples. */
 .shortcut-controls { display: flex; gap: 8px; flex-shrink: 0; }
 .shortcut-key { min-width: 132px; justify-content: center; font-family: var(--mono); }
 .shortcut-key.recording { border-color: var(--accent, var(--text)); color: var(--text); }
@@ -2132,14 +2130,6 @@ button.settings-search-tab:hover { color: var(--text); }
 .preview-opened.failed { color: var(--warn); }
 .preview-web-frame { flex: 1; min-height: 0; position: relative; display: flex; }
 .preview-web-frame:focus { outline: none; }
-/* A page at a size of its own sits at the top of the box, centred, on the panel's ground. */
-.preview-web.sized { align-items: center; overflow: hidden; background: var(--raised); }
-.preview-viewport { flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); min-width: 0; }
-.preview-viewport select { flex: 1 1 auto; min-width: 0; max-width: 220px; height: 26px; padding: 0 6px; }
-.preview-viewport input { flex: 0 1 64px; min-width: 40px; width: 64px; height: 26px; padding: 0 6px; background: var(--bg); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; font: inherit; font-size: calc(13rem / 14); font-variant-numeric: tabular-nums; outline: none; }
-.preview-viewport input:focus-visible { border-color: var(--line-3); }
-.preview-viewport input[aria-invalid] { border-color: var(--warn); }
-.preview-viewport > span { color: var(--faint); font-size: calc(12rem / 14); }
 .preview-loading { position: absolute; inset: 0; margin: 0; padding: 28px 22px; background: var(--sidebar); }
 .preview-image {
   flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 18px;
