@@ -108,9 +108,11 @@ export function InlineMarks({
               <span key={j} className="inline-mark-cover" style={{ ...c, left: c.left - 1, width: c.width + 2 }} />
             ))}
             <span className="inline-mark" style={{ ...box, left: box.left - 1, width: box.width + 2 }} data-inline-image={k.n}>
-              {url ? <img src={url} alt="" /> : <span className="inline-mark-blank" />}
-              <span className="inline-mark-name">{k.file.name}</span>
-              <span className="inline-mark-size">{formatBytes(k.file.size)}</span>
+              <span className="inline-mark-pill">
+                {url ? <img src={url} alt="" /> : <span className="inline-mark-blank" />}
+                <span className="inline-mark-name">{k.file.name}</span>
+                <span className="inline-mark-size">{formatBytes(k.file.size)}</span>
+              </span>
             </span>
           </Fragment>
         );

@@ -677,9 +677,11 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .inline-marks {
   position: absolute; overflow: hidden; pointer-events: none; color: transparent; margin: 0; z-index: 1;
 }
-.inline-mark {
-  position: absolute; display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap; border-radius: 6px;
-  background: var(--raised-2); color: var(--text-2); font-size: 0.86em; padding: 0 6px 0 3px;
+/* The chip covers the whole mark in the composer's colour; the pill inside is only as wide as what it shows. */
+.inline-mark { position: absolute; display: flex; align-items: center; overflow: hidden; background: var(--raised); }
+.inline-mark-pill {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 100%; overflow: hidden; white-space: nowrap;
+  border-radius: 6px; background: var(--raised-2); color: var(--text-2); font-size: 0.86em; padding: 0 6px 0 3px;
 }
 .inline-mark img, .inline-mark-blank { height: calc(100% - 6px); aspect-ratio: 1; border-radius: 4px; object-fit: cover; flex: none; background: var(--line-2); }
 .inline-mark-name { color: var(--accent); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -1275,7 +1277,8 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .chip.chip-card { position: relative; display: block; width: 88px; height: 88px; padding: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--line-2); background: var(--raised-2); }
 .chip-card-img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .chip-card-blank { background: var(--raised-2); }
-.chip-card button { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 6px; background: rgba(0, 0, 0, 0.62); color: #fff; }
+.chip-card button { position: absolute; top: 5px; right: 5px; width: 26px; height: 26px; border-radius: 7px; background: rgba(0, 0, 0, 0.62); color: #fff; }
+.chip-card button svg { width: 15px; height: 15px; }
 .chip-card button:hover { background: rgba(0, 0, 0, 0.82); color: #fff; }
 .chip-card button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chip-card-note { position: absolute; left: 4px; bottom: 4px; padding: 1px 5px; border-radius: 5px; background: rgba(0, 0, 0, 0.62); }

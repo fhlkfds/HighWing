@@ -6,7 +6,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { CloudOff, Image as ImageIcon, ImageOff, Paperclip, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { staleText, type AnnotationLabel } from "../hermes/annotations";
-import type { Attachment, SentImage } from "../hermes/model";
+import type { Attachment, SentImage, SentImagePath } from "../hermes/model";
 import { sentImageName, type SentImageLoad, type SentImageStore } from "../hermes/sentImages";
 import { useOpenPreview, usePathsIn } from "./previewContext";
 import { asError } from "../hermes/tauriPipe";
@@ -149,24 +149,9 @@ export function SentImages({ images, offline }: { images: readonly SentImage[]; 
  * Hermes keeps no size, so none is shown.
  */
 export function InlineSentImage({ image, name, offline }: { image: SentImage; name: string; offline: boolean }) {
-  const store = useContext(SentImageReader);
   const open = useOpenPreview();
-  const chat = usePathsIn()?.session;
-  const [load, setLoad] = useState<SentImageLoad>(() => store?.look(image.path, chat) ?? NO_STORE);
+  const { load } = useSentImage(image.path, offline);
   const [broken, setBroken] = useState(false);
-  useEffect(() => {
-    if (!store) return setLoad(NO_STORE);
-    const now = store.look(image.path, chat);
-    setLoad(now);
-    if (now.state !== "loading" || offline) return;
-    let live = true;
-    void store.load(image.path, chat).then((l) => {
-      if (live) setLoad(l);
-    });
-    return () => {
-      live = false;
-    };
-  }, [store, image.path, chat, offline]);
   const src = load.state === "shown" && !broken ? load.src : undefined;
   return (
     <button type="button" className="inline-image" title={`${name}\nOpens in the preview`} disabled={!open} onClick={() => open?.({ kind: "server", path: image.path, host: true })}>
@@ -178,27 +163,33 @@ export function InlineSentImage({ image, name, offline }: { image: SentImage; na
 
 const NO_STORE: SentImageLoad = { state: "failed", why: "Images from Hermes can't be read here." };
 
-function SentPicture({ image, offline }: { image: SentImage; offline: boolean }) {
+/** A sent image read through the store, read again when `asked` or `attempt` changes. Nothing is read while offline. */
+function useSentImage(path: SentImagePath, offline: boolean, asked = false, attempt = 0) {
   const store = useContext(SentImageReader);
-  const open = useOpenPreview();
   // The chat the message is in: an image is read by itself only if this app sent it in that chat.
   const chat = usePathsIn()?.session;
-  const [asked, setAsked] = useState(false);
-  const [load, setLoad] = useState<SentImageLoad>(() => store?.look(image.path, chat) ?? NO_STORE);
-  const [attempt, setAttempt] = useState(0);
+  const [load, setLoad] = useState<SentImageLoad>(() => store?.look(path, chat) ?? NO_STORE);
   useEffect(() => {
     if (!store) return setLoad(NO_STORE);
-    const now = store.look(image.path, chat, asked);
+    const now = store.look(path, chat, asked);
     setLoad(now);
     if (now.state !== "loading" || offline) return;
     let live = true;
-    void store.load(image.path, chat, asked).then((l) => {
+    void store.load(path, chat, asked).then((l) => {
       if (live) setLoad(l);
     });
     return () => {
       live = false;
     };
-  }, [store, image.path, chat, offline, attempt, asked]);
+  }, [store, path, chat, offline, attempt, asked]);
+  return { store, chat, load, setLoad };
+}
+
+function SentPicture({ image, offline }: { image: SentImage; offline: boolean }) {
+  const open = useOpenPreview();
+  const [asked, setAsked] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const { store, chat, load, setLoad } = useSentImage(image.path, offline, asked, attempt);
   const name = sentImageName(image);
   if (load.state === "loading" && !offline) return <div className="sent-image-loading" role="img" aria-busy="true" aria-label={`Loading ${name}`} title={name} />;
   if (load.state === "ask")
