@@ -279,6 +279,39 @@ export const en = {
     notChanged: (name: string, why: string) => `${name} wasn't changed. ${why}`,
   },
   threads: {
+    badge: "Thread",
+    badgeTip: "One of its bot's threads, on one topic",
+    /** A thread as its tab and the Inbox name it: its bot, then its topic. */
+    named: (bot: string, topic: string) => `${bot} / ${topic}`,
+    count: (n: number) => (n === 0 ? "No threads" : n === 1 ? "1 thread" : `${n} threads`),
+    notRead: "Threads",
+    /** The disclosure under a bot's row, as a screen reader says it. */
+    toggle: (bot: string, count: string) => `${bot}: ${count}`,
+    of: (bot: string) => `${bot}'s threads`,
+    new: "New thread",
+    topicFor: (bot: string) => `Topic of the new thread with ${bot}`,
+    topicHint: "Topic, then Enter",
+    renameFor: (topic: string) => `New topic for the thread ${topic}`,
+    shown: "the thread shown",
+    readFailed: (why: string) => `Couldn't read the threads: ${why}`,
+    capped: "Older threads may not be listed.",
+    moreFor: (topic: string) => `More for the thread ${topic}`,
+    menu: { rename: "Rename", delete: "Delete" },
+    notRenamed: (topic: string, why: string) => `The thread “${topic}” wasn't renamed. ${why}`,
+    notDeleted: (topic: string, why: string) => `The thread “${topic}” wasn't deleted. ${why}`,
+    replyRunning: "It has a reply running here. Stop the reply first.",
+    remove: {
+      title: (topic: string) => `Delete the thread “${topic}”?`,
+      note: "This deletes the thread in every Hermes client, on every computer. It can't be undone.",
+      confirm: "Delete thread",
+    },
+    /** What `/new` typed in a thread says: a thread is compacted, as a Bot Chat is. */
+    compact: {
+      lead: "A thread is one continuous conversation, so /new compacts it instead of starting a new chat.",
+      compacted: "Hermes compacted it.",
+      nothing: "There was nothing to compact yet.",
+      wait: "A thread is one continuous conversation, so /new compacts it. Wait for the reply to finish.",
+    },
     /** Thread from here: the action under a Bot Chat's message, and the preview it opens. */
     from: {
       action: "Thread from here",

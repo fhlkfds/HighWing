@@ -56,9 +56,10 @@ import { desktopLinks, type LinkInbox } from "./hermes/tauriLinks";
 import { ChatLinkNotice, type LinkNoticeView } from "./ui/ChatLinkNotice";
 import { Inbox } from "./ui/Inbox";
 import { BotList, useBotActions, type BotEditWiring } from "./ui/Bots";
-import { chatKind, policyOf } from "./hermes/chatKind";
+import { CHAT_POLICY, chatKind, policyOf } from "./hermes/chatKind";
 import { jobRunTitle } from "./hermes/cronJobs";
 import { botActivity, botsWaiting, newInBotChatNote, type Bot } from "./hermes/bots";
+import { isThreadTitle, threadTopic, type ThreadTitle } from "./hermes/threads";
 import { blocksRestore, inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxAcks, type InboxEntry } from "./hermes/inbox";
 import { searchEverywhere, type EverywhereFilter, type EverywhereOutcome, type EverywhereRow } from "./hermes/everywhere";
 import { LiveConnections, attention as attentionOf, withoutServer, type ChatRef, type LiveSummary } from "./hermes/liveConnections";
@@ -1086,9 +1087,11 @@ type BotVisit = { home: string; before: string | null };
 
 /**
  * What opens once the profile switched to has listed its chats, unless the owner goes elsewhere first (`nav`): a bot's
- * Bot Chat (ADR 0066), the New chat pane, or the chat a bot visit left (ADR 0203).
+ * Bot Chat (ADR 0066) or one of its threads (ADR 0205), the New chat pane, or the chat a bot visit left (ADR 0203).
  */
-type Arrival = { profile: string; nav: number } & ({ open: "bot"; bot: Bot; opening?: boolean } | { open: "new" } | { open: "chat"; chatId: string });
+type Arrival = { profile: string; nav: number } & ({ open: "bot"; bot: Bot; thread?: ThreadArrival; opening?: boolean } | { open: "new" } | { open: "chat"; chatId: string });
+/** Which of a bot's threads an arrival opens in place of its Bot Chat (ADR 0205): the one with a title, or a new one on a topic. */
+type ThreadArrival = { title: ThreadTitle } | { new: string };
 
 /**
  * Starts a pane's chat if it hasn't started, and sends to it. `mirrored`: the message was typed in the other compared
@@ -1285,7 +1288,7 @@ export function Main({
 }) {
   const connection: SavedConnection = "id" in given ? given : { ...given, id: "", name: defaultName(given), addedAt: 0 };
   const words = useLocale();
-  const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, live, models, switching, branchNews, bots, botPictures, defaultName: defaultProfileName } = useSyncExternalStore(
+  const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, live, models, switching, branchNews, bots, botPictures, threads: botThreads, defaultName: defaultProfileName } = useSyncExternalStore(
     hermes.subscribe,
     hermes.getSnapshot,
   );
@@ -2337,6 +2340,8 @@ export function Main({
   // remembered for the next launch: what reopens a Bot Chat is its bot's row. The pen starts an ordinary chat there.
   const botEdit = useMemo<BotEditWiring>(() => ({ look: (name) => hermes.botLook(name), edit: (name, edits) => hermes.editBot(name, edits) }), [hermes]);
   const loadBots = useCallback(() => hermes.bots(), [hermes]);
+  /** The bots whose thread disclosures the owner opened or closed, for as long as the app runs (Threads.tsx). */
+  const [threadsOpen, setThreadsOpen] = useState<Record<string, boolean>>({});
   const activityOf = (b: Bot, roster: readonly Bot[]) => {
     const ids = b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [];
     const open = b.profile === profile ? chats.find((c) => ids.includes(c.id)) : undefined;
@@ -2361,14 +2366,17 @@ export function Main({
     beforeBotChat.current = null;
   }, [profile]);
   const onBotChat = !!shownChat && chatKind(shownChat) === "bot";
-  /** `visiting`: what becomes of a bot visit (ADR 0203); none ends it, here or with the switch to the bot's profile. */
-  const openBot = (b: Bot, then: "open" | "new", visiting?: BotVisit) => {
+  /**
+   * `visiting`: what becomes of a bot visit (ADR 0203); none ends it, here or with the switch to the bot's profile.
+   * `thread`: one of the bot's threads opens in place of its Bot Chat.
+   */
+  const openBot = (b: Bot, then: "open" | "new", visiting?: BotVisit, thread?: ThreadArrival) => {
     guard(() => {
-      if (then === "open" && b.profile === profile && !(shownChat && policyOf(shownChat).ofBot)) beforeBotChat.current = active.chatId;
+      if (then === "open" && !thread && b.profile === profile && !(shownChat && policyOf(shownChat).ofBot)) beforeBotChat.current = active.chatId;
       if (b.profile !== profile) void switchProfileNow(b.profile, { visit: visiting });
       else setVisit(visiting);
       // Anything the owner opens or switches to after this, before the Bot Chat opens, wins over it (`navGen`).
-      setArrival(then === "open" ? { open: "bot", bot: b, profile: b.profile, nav: navGen.current } : { open: "new", profile: b.profile, nav: navGen.current });
+      setArrival(then === "open" ? { open: "bot", bot: b, thread, profile: b.profile, nav: navGen.current } : { open: "new", profile: b.profile, nav: navGen.current });
     }, b.profile !== profile ? "profile" : "leave");
   };
   useEffect(() => {
@@ -2386,8 +2394,8 @@ export function Main({
     const opening = { ...go, opening: true };
     setArrival(opening);
     const still = () => navGen.current === go.nav && hermes.profile === go.profile;
-    hermes
-      .openBotChat(go.bot)
+    const opened = !go.thread ? hermes.openBotChat(go.bot) : "new" in go.thread ? hermes.newThread(go.bot, go.thread.new) : hermes.openThread(go.bot, go.thread.title);
+    opened
       .then((id) => still() && openChat(id, { remember: false }))
       .catch((e: unknown) => still() && setToast({ text: (e as Error).message, at: Date.now() }))
       .finally(() => setArrival((g) => (g === opening ? undefined : g)));
@@ -2397,8 +2405,8 @@ export function Main({
   // A bot visit (ADR 0203). A bot row in Bots mode whose profile isn't shown starts one, or carries one on, and the
   // owner's own bot ends it there. Chats and New chat go back to `home`; an ordinary chat of the bot's profile on screen
   // makes that profile the owner's. The next launch opens on `home` while a visit lasts.
-  const visitBot = (b: Bot) =>
-    openBot(b, "open", b.profile === profile ? visit : b.profile === visit?.home ? undefined : (visit ?? { home: profile, before: active.chatId }));
+  const visitBot = (b: Bot, thread?: ThreadArrival) =>
+    openBot(b, "open", b.profile === profile ? visit : b.profile === visit?.home ? undefined : (visit ?? { home: profile, before: active.chatId }), thread);
   const goHome = (v: BotVisit, to: "chats" | "new") =>
     guard(() => {
       if (to === "chats") setChatListMode("chats");
@@ -3028,7 +3036,9 @@ export function Main({
         pane={p.key}
         tabs={p.tabs.map((id) => {
           const c = id === null ? undefined : chats.find((c) => c.id === id);
-          const title = c && chatKind(c) === "bot" && shownName !== undefined ? shownName : (c?.title ?? "New chat");
+          const topic = c && threadTopic(c.title);
+          const title =
+            c && shownName !== undefined && policyOf(c).ofBot ? (topic === undefined ? shownName : words.threads.named(shownName, topic)) : (c?.title ?? "New chat");
           return { id, title, running: c?.running, unread: c?.unread };
         })}
         current={p.chatId}
@@ -3263,11 +3273,18 @@ export function Main({
   };
   // Bots mode's New bot, Reload and row menu (ADR 0194, ADR 0203): the dialogs are drawn outside the list panel, so a
   // delete that switches away from the open bot's profile finishes.
+  const shownThread = !covering && shownChat && isThreadTitle(shownChat.title) ? shownChat.title : undefined;
+  const threadReads = {
+    all: (olderThan: number) => hermes.readThreads(hermes.getSnapshot().bots?.roster.map((b) => b.profile) ?? [], olderThan),
+    // The shown bot's threads, and those of each bot whose disclosure the owner opened.
+    watched: () => hermes.readThreads([profile, ...Object.keys(threadsOpen).filter((p) => threadsOpen[p])]),
+  };
   const botActions = useBotActions({
     profiles: profilesWiring,
     botEdit,
     roster: bots?.roster,
     load: loadBots,
+    threads: threadReads,
     shown: botsInList,
     onRefresh: () => void hermes.checkOtherProfiles(),
     onNote: (text) => setToast({ text, at: Date.now() }),
@@ -3377,6 +3394,20 @@ export function Main({
                   onOpen={visitBot}
                   onNewChat={(b) => openBot(b, "new")}
                   onMenu={botActions.onMenu}
+                  threads={{
+                    shelves: botThreads,
+                    shown: shownThread,
+                    expanded: threadsOpen,
+                    onExpand: (p, open) => setThreadsOpen((was) => ({ ...was, [p]: open })),
+                    onOpen: (b, title) => visitBot(b, { title }),
+                    onNew: (b, topic) => visitBot(b, { new: topic }),
+                    onRename: (t, topic) => hermes.renameThread(t, topic).then(() => {}, (e: unknown) => setToast({ text: words.threads.notRenamed(t.topic, errorText(e)), at: Date.now() })),
+                    onDelete: (t) =>
+                      hermes.deleteThread(t).then(
+                        (deleted) => void (deleted || setToast({ text: words.threads.notDeleted(t.topic, words.threads.replyRunning), at: Date.now() })),
+                        (e: unknown) => setToast({ text: words.threads.notDeleted(t.topic, errorText(e)), at: Date.now() }),
+                      ),
+                  }}
                 />
               ) : (
                 <div className="empty-hint">{words.bots.reading}</div>
@@ -4149,7 +4180,8 @@ function ChatView({
   const shownDraft = draftOf(chatId);
   const composerText = useSyncExternalStore(savedDrafts.subscribe, () => savedDrafts.get(shownDraft));
   const stillIn = () => hermes.profile === profile;
-  const policy = policyOf(chat);
+  const kind = chatKind(chat);
+  const policy = CHAT_POLICY[kind];
   const sessionHere = started && policy.session === "live";
 
   // A new chat takes each value from what the owner chose for it here, then the shown project's defaults, then the
@@ -4370,7 +4402,7 @@ function ChatView({
       if (def.name === "new") {
         if (status !== "connected") return "Not connected to Hermes.";
         if (!chat.runtimeId) return "This chat is still loading from Hermes.";
-        if (chat.running) return "A Bot Chat is one continuous conversation, so /new compacts it. Wait for the reply to finish.";
+        if (chat.running) return kind === "thread" ? words.threads.compact.wait : "A Bot Chat is one continuous conversation, so /new compacts it. Wait for the reply to finish.";
         return undefined;
       }
       if (!started) return "This chat hasn't started yet. Send a message first.";
@@ -4405,7 +4437,9 @@ function ChatView({
           if (policy.ofBot) {
             const res = await hermes.compact(chat.id);
             if (here()) done();
-            return newInBotChatNote(res);
+            if (kind !== "thread") return newInBotChatNote(res);
+            const said = words.threads.compact;
+            return `${said.lead} ${res.kind === "compacted" ? said.compacted : res.kind === "nothing" ? said.nothing : (res.message ?? "")}`.trim();
           }
           done();
           onNew();

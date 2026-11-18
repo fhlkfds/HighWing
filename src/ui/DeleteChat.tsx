@@ -5,14 +5,19 @@ import { TriangleAlert } from "lucide-react";
 import { composing } from "./bits";
 import { useModal } from "./modal";
 
-/** Escape, Cancel or a click outside keeps the chat. Focus goes back to `returnTo`, or to what had it. */
+/**
+ * Escape, Cancel or a click outside keeps the chat. Focus goes back to `returnTo`, or to what had it. `words`: what
+ * it says for something other than a chat, such as a bot's thread (ADR 0205).
+ */
 export function DeleteChatDialog({
   title,
+  words,
   returnTo,
   onDelete,
   onClose,
 }: {
   title: string;
+  words?: { title: string; note: string; cancel: string; confirm: string };
   returnTo?: RefObject<HTMLElement | null>;
   onDelete: () => void;
   onClose: () => void;
@@ -37,17 +42,17 @@ export function DeleteChatDialog({
         }}
       >
         <h2 id="delete-chat-title" className="leave-title">
-          <TriangleAlert size={14} aria-hidden /> Delete “{title}”?
+          <TriangleAlert size={14} aria-hidden /> {words?.title ?? `Delete “${title}”?`}
         </h2>
         <p id="delete-chat-note" className="muted">
-          This deletes the chat in every Hermes client, on every computer. It can't be undone.
+          {words?.note ?? "This deletes the chat in every Hermes client, on every computer. It can't be undone."}
         </p>
         <div className="confirm-actions">
           <button className="btn" autoFocus onClick={onClose}>
-            Cancel
+            {words?.cancel ?? "Cancel"}
           </button>
           <button className="btn danger" onClick={onDelete}>
-            Delete chat
+            {words?.confirm ?? "Delete chat"}
           </button>
         </div>
       </div>

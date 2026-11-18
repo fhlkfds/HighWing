@@ -1,7 +1,7 @@
 // The bots (ADR 0066), in the chat list's Bots mode (ADR 0195, ADR 0203): one row per bot, which is a Hermes profile,
 // with its picture, its name, its Bot Chat's last message and what it is doing. The name's tip is the bot's description.
 // A row opens the bot's Bot Chat, found by title every time (bots.ts); the pen beside it starts an ordinary chat in the
-// bot's profile. Above the rows, New bot makes a profile through Settings → Profiles' New profile form, and the new
+// bot's profile. Under each row, a disclosure lists the bot's threads (Threads.tsx, ADR 0205). Above the rows, New bot makes a profile through Settings → Profiles' New profile form, and the new
 // bot's row is shown once the roster is read again (ADR 0164); Reload reads the roster now. A right-click on a row
 // opens its menu (ADR 0194): Chat, Settings, Clone, Pin, Hide and Delete, through Settings → Profiles' own dialogs and
 // `Hermes.editBot`, which never writes over a change made elsewhere (ADR 0189). Every word comes from the catalogue
@@ -17,9 +17,14 @@ import { CloneProfileDialog } from "./CloneProfile";
 import { pick } from "./keybindings";
 import { DeleteProfile, MenuEntry, ProfileForm, blocked, failureText, useSwitchTo, type FormResult, type ProfilesWiring } from "./ProfileSettings";
 import { useLocale } from "../i18n/locale";
+import { ThreadDisclosure, type BotThreads } from "./Threads";
 
 /** How often the roster is read again while the bots show. Hermes's desktop polls every 5 seconds; this is enough. */
 export const BOTS_REFRESH_MS = 15_000;
+/** A bot's threads read less than this long ago aren't read again when Bots mode opens. */
+export const THREADS_FRESH_MS = 60_000;
+/** How often every bot's threads are read again while the bots show: every this many roster reads, 5 minutes. */
+export const THREADS_EVERY_READS = 20;
 
 const NO_SUBSCRIBE = () => () => {};
 const NO_SNAPSHOT = () => undefined;
@@ -51,6 +56,10 @@ async function dialogOn(profiles: Omit<ProfilesWiring, "showTab">, botEdit: BotE
  * the profile from `GET /api/profiles` as they open; only the entry picked last opens. `element`, the menu and every
  * dialog, is drawn outside Bots mode, so a delete that switches away from the open bot's profile runs to its end.
  *
+ * `threads`: reads the bots' threads (`Hermes.readThreads`), after the roster. While the bots show, `all` reads every
+ * bot's as Bots mode opens, unless read in the last THREADS_FRESH_MS, and again every THREADS_EVERY_READS roster
+ * reads; `watched` reads the shown bot's and the open disclosures' with each roster read in between.
+ *
  * `shown`: the bots show, so the roster is read now and every BOTS_REFRESH_MS. It is read again once a dialog closes,
  * and then a row whose focus went with it hands focus to the bot saved (under its new name after a rename), else the
  * Hidden in Hermes fold it went behind, the open bot's row, the first bot's, or the profile switcher. The bot New bot
@@ -62,6 +71,7 @@ export function useBotActions({
   botEdit,
   roster,
   load,
+  threads,
   shown,
   onRefresh,
   onNote,
@@ -71,6 +81,7 @@ export function useBotActions({
   botEdit: BotEditWiring;
   roster?: readonly Bot[];
   load: () => Promise<unknown>;
+  threads?: { all: (olderThan: number) => Promise<void>; watched: () => Promise<void> };
   shown: boolean;
   onRefresh: () => void;
   onNote: (text: string) => void;
@@ -98,11 +109,17 @@ export function useBotActions({
   const [reloading, setReloading] = useState(false);
   const reads = useRef(0);
 
-  const read = async () => {
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  /** `everyThread`: also read each bot's threads not read in the last so many ms; otherwise only the watched bots'. */
+  const read = async (everyThread?: number) => {
     const n = ++reads.current;
     try {
       await load();
       if (n === reads.current) setFailed(undefined);
+      const t = threadsRef.current;
+      // A failed read shows under its own bot (`ThreadShelf.error`).
+      if (t) void (everyThread === undefined ? t.watched() : t.all(everyThread)).catch(() => {});
     } catch (e) {
       if (n === reads.current) setFailed((e as Error).message);
     }
@@ -111,8 +128,9 @@ export function useBotActions({
 
   useEffect(() => {
     if (!shown || !connected) return;
-    void read();
-    const every = setInterval(() => void read(), BOTS_REFRESH_MS);
+    void read(THREADS_FRESH_MS);
+    let ticks = 0;
+    const every = setInterval(() => void read(++ticks % THREADS_EVERY_READS === 0 ? 0 : undefined), BOTS_REFRESH_MS);
     return () => clearInterval(every);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `read` is new every render, so listing it would restart the poll on every render
   }, [shown, connected, load]);
@@ -121,7 +139,7 @@ export function useBotActions({
     if (reloading) return;
     setReloading(true);
     onRefresh();
-    void read().finally(() => setReloading(false));
+    void read(0).finally(() => setReloading(false));
   };
 
   const open = async (bot: Bot, kind: "edit" | "delete") => {
@@ -324,8 +342,8 @@ export function useBotActions({
 
 /**
  * The bots' rows: pinned first, hidden ones behind a disclosure, Up and Down between them. A row in another profile
- * than `profile` asks first while `leaving` says what switching leaves behind. `current`: the profile of the bot whose
- * Bot Chat is open.
+ * than `profile` asks first while `leaving` says what switching leaves behind, and so does a thread of such a bot.
+ * `current`: the profile of the bot whose Bot Chat is open. `threads`: each bot's threads, drawn under its row.
  */
 export function BotList({
   bots,
@@ -337,6 +355,7 @@ export function BotList({
   onOpen,
   onNewChat,
   onMenu,
+  threads,
 }: {
   bots: Bot[];
   pictures: Record<string, string>;
@@ -348,17 +367,20 @@ export function BotList({
   onNewChat: (bot: Bot) => void;
   /** Opens a bot's menu at a point of the window. `open`: opens the bot as its row does. */
   onMenu: (bot: Bot, x: number, y: number, open: () => void) => void;
+  threads?: BotThreads;
 }) {
   const l = useLocale();
   const w = l.bots;
   const [showHidden, setShowHidden] = useState(false);
-  const [asking, setAsking] = useState<{ bot: Bot; then: "open" | "new" }>();
+  const [asking, setAsking] = useState<{ bot: Bot; then: () => void }>();
 
-  const go = (bot: Bot, then: "open" | "new") => {
+  /** Does `then` with a bot, after asking when it means leaving the shown profile with something unfinished there. */
+  const going = (bot: Bot, then: () => void) => {
     if (bot.profile !== profile && leaving) return setAsking({ bot, then });
     setAsking(undefined);
-    (then === "open" ? onOpen : onNewChat)(bot);
+    then();
   };
+  const go = (bot: Bot, then: "open" | "new") => going(bot, () => (then === "open" ? onOpen : onNewChat)(bot));
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     // WebKitGTK sends no contextmenu event for Shift+F10, so the menu's keys are read here, from any button of a row.
@@ -371,7 +393,7 @@ export function BotList({
       return onMenu(bot, r.left + 24, r.bottom, () => go(bot, "open"));
     }
     if (composing(e) || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
-    const rows = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(".bots-open"));
+    const rows = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(".bots-open, .bots-threads button"));
     const at = rows.indexOf(document.activeElement as HTMLButtonElement);
     if (at < 0) return;
     e.preventDefault();
@@ -381,19 +403,38 @@ export function BotList({
   // Pinned bots first, then Hermes's order. Hidden ones wait behind a disclosure, as in Hermes's own list.
   const shown = bots.filter((b) => !b.hidden).sort((a, b) => Number(b.pinned) - Number(a.pinned));
   const hidden = bots.filter((b) => b.hidden);
-  const row = (b: Bot) => (
-    <Row
-      key={b.profile}
-      bot={b}
-      picture={pictures[b.profile]}
-      activity={activity(b, bots)}
-      shown={b.profile === profile}
-      current={b.profile === current}
-      onOpen={() => go(b, "open")}
-      onNewChat={() => go(b, "new")}
-      onMenu={(x, y) => onMenu(b, x, y, () => go(b, "open"))}
-    />
-  );
+  const row = (b: Bot) => {
+    const shelf = threads?.shelves[b.profile];
+    const shownThread = b.profile === profile ? threads?.shown : undefined;
+    return [
+      <Row
+        key={b.profile}
+        bot={b}
+        picture={pictures[b.profile]}
+        activity={activity(b, bots)}
+        shown={b.profile === profile}
+        current={b.profile === current}
+        threads={shelf && (shelf.at > 0 || !shelf.error) ? shelf.threads.length : undefined}
+        onOpen={() => go(b, "open")}
+        onNewChat={() => go(b, "new")}
+        onMenu={(x, y) => onMenu(b, x, y, () => go(b, "open"))}
+      />,
+      threads && (
+        <ThreadDisclosure
+          key={`${b.profile} threads`}
+          bot={b}
+          shelf={shelf}
+          open={threads.expanded[b.profile] ?? (b.profile === current || !!shownThread)}
+          shown={shownThread}
+          onToggle={() => threads.onExpand(b.profile, !(threads.expanded[b.profile] ?? (b.profile === current || !!shownThread)))}
+          onOpen={(title) => going(b, () => threads.onOpen(b, title))}
+          onNew={(topic) => going(b, () => threads.onNew(b, topic))}
+          onRename={threads.onRename}
+          onDelete={threads.onDelete}
+        />
+      ),
+    ];
+  };
 
   return (
     <>
@@ -404,7 +445,7 @@ export function BotList({
           onStay={() => setAsking(undefined)}
           onGo={() => {
             setAsking(undefined);
-            (asking.then === "open" ? onOpen : onNewChat)(asking.bot);
+            asking.then();
           }}
         />
       )}
@@ -459,6 +500,7 @@ function Row({
   activity,
   shown,
   current,
+  threads,
   onOpen,
   onNewChat,
   onMenu,
@@ -468,6 +510,8 @@ function Row({
   activity: BotActivity;
   shown: boolean;
   current: boolean;
+  /** How many threads the bot has, once read. */
+  threads?: number;
   onOpen: () => void;
   onNewChat: () => void;
   onMenu: (x: number, y: number) => void;
@@ -485,6 +529,7 @@ function Row({
       b.description,
       b.botChat?.preview ? w.rowLast(b.botChat.preview) : preview,
       when && w.rowActive(when),
+      threads !== undefined && l.threads.count(threads),
       shown && w.rowShown,
     ].filter((part): part is string => !!part),
   );

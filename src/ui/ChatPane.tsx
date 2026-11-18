@@ -18,6 +18,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
 import { CHAT_POLICY, chatKind, policyOf } from "../hermes/chatKind";
+import { threadTopic } from "../hermes/threads";
 import { DeleteChatDialog } from "./DeleteChat";
 import { ExportChatDialog, type ExportMode } from "./ExportChat";
 import { QueuePanel, type QueueApi } from "./Queue";
@@ -549,9 +550,12 @@ export function ChatPane({
   onCheckpoints?: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const words = useLocale().chat;
+  const l = useLocale();
+  const words = l.chat;
   const kind = chatKind(chat);
-  const botOfChat = kind === "bot" ? bot : undefined;
+  // A Bot Chat and a thread are headed by their bot, which is the shown profile's.
+  const botOfChat = CHAT_POLICY[kind].ofBot ? bot : undefined;
+  const topic = botOfChat && kind === "thread" ? threadTopic(chat.title) : undefined;
   const keys = useBindings();
   const labels = (chords: readonly Chord[]) => chords.map(chordLabel).join(" or ");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -924,7 +928,21 @@ export function ChatPane({
           {chat.source !== "app" && <SourceIcon source={chat.source} size={13} />}
           {botOfChat && <BotFace bot={botOfChat} size="sm" />}
           <span translate={botOfChat ? "no" : undefined}>{botOfChat?.name ?? chat.title}</span>
-          {kind === "bot" ? (
+          {topic !== undefined && (
+            <>
+              <span className="chat-title-sep" aria-hidden>
+                /
+              </span>
+              <span className="chat-title-topic" translate="no">
+                {topic}
+              </span>
+            </>
+          )}
+          {topic !== undefined ? (
+            <span className="badge" title={l.threads.badgeTip}>
+              {l.threads.badge}
+            </span>
+          ) : kind === "bot" ? (
             <span className="badge" title={words.botChatTip}>
               {words.botChat}
             </span>

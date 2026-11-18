@@ -2615,7 +2615,7 @@ export class Hermes {
     if (!deleted) return false;
     // A compacted thread's earlier session may still be open here under the title.
     if (profile === this.profile && this.snapshot.chats.some((c) => c.title === title)) this.update({ chats: this.snapshot.chats.filter((c) => c.title !== title) });
-    this.threadEdited(profile, gone);
+    if (!here) this.threadEdited(profile, gone);
     return true;
   }
 
@@ -4150,6 +4150,8 @@ export class Hermes {
       // Its queue had nowhere left to go.
       if (this.profile === profile && this.snapshot.queues[chatId]) this.setQueue(chatId, { items: [] });
       else this.cache.saveQueue(profile, chatId, undefined);
+      // A thread deleted from its pane leaves its bot's shelf too.
+      if (isThreadTitle(chat.title)) this.threadEdited(profile, (threads) => threads.filter((t) => t.title !== chat.title));
       return true;
     } catch (e) {
       this.deleted.delete(profile, chatId);
