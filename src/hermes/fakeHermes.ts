@@ -3431,12 +3431,24 @@ export class FakeHermes {
     if (i < 0) return { ok: true, already_absent: true };
     if (Number(revision) !== (store[i].runtime_revision ?? 0)) throw new RestError(409, `{"detail":"revision_conflict"}`);
     if (Number(generation) !== (store[i].runtime_generation ?? 0)) throw new RestError(409, `{"detail":"stale_generation"}`);
-    store.splice(i, 1);
-    delete this.transcripts[id];
+    // The dashboard's delete takes the whole compression chain with the session (`include_compression_chain`).
+    const root = store.find((r) => r.listedAs?.id === id) ?? store[i];
+    const chain = [root.id];
+    for (let next = root; next.end_reason === "compression"; ) {
+      const child = store.find((r) => r.parent_session_id === next.id && r.unlisted);
+      if (!child) break;
+      chain.push(child.id);
+      next = child;
+    }
+    if (!chain.includes(id)) chain.push(id);
+    for (const gone of chain) {
+      store.splice(store.findIndex((r) => r.id === gone), 1);
+      delete this.transcripts[gone];
+    }
     // The contract removes a deleted chat's project links with it.
     const p = profile || "default";
-    if (this.membership[p]) this.membership[p] = this.membership[p].filter((l) => l.session_id !== id);
-    return { ok: true, deleted_ids: [id] };
+    if (this.membership[p]) this.membership[p] = this.membership[p].filter((l) => !chain.includes(l.session_id));
+    return { ok: true, deleted_ids: chain };
   }
 
   /**

@@ -56,6 +56,7 @@ import { parseCheckpointList, type RelPath } from "./fileChanges";
 import type { Restored, RollbackIO } from "./fileUndo";
 import type { AppMethod } from "./canonicalVerbs";
 import { policyOf } from "./chatKind";
+import { THREAD_PREFIX, Threads, isThreadTitle, threadTitle, threadTopic, titleInUse, type BotThread, type ThreadShelf, type ThreadTitle } from "./threads";
 import { projectStored, type TranscriptMessage } from "./storedTranscript";
 import {
   BOT_BLOCK_FIELDS,
@@ -137,6 +138,10 @@ export const APP_SOURCE = "gui";
 const BOT_CHAT_RENAME = "A Bot Chat's name is how Hermes finds it, so it can't be renamed.";
 const THREAD_RETITLE = "A thread is named for its topic, so Hermes doesn't write a title for it. Rename it instead.";
 /** Hermes runs only the job in a Job run's session, and stores a refusal in the run's history if it is sent a message. */
+/** How many bots' threads are read at once. */
+const SHELF_READS_AT_ONCE = 3;
+/** How many times one read of a bot's threads lists them again because a thread changed here meanwhile. */
+const SHELF_READ_TRIES = 3;
 const JOB_RUN_NO_SESSION = "A scheduled job's run can't be continued here.";
 const JOB_RUN_READ_ONLY = "This chat is a run of a scheduled job, so it's read-only here.";
 const HERMES_MESSAGES_PAGE_MAX = 500;
@@ -618,6 +623,8 @@ export type Snapshot = {
   bots?: { roster: Bot[]; at: number };
   /** Each bot's picture as a data URL, by profile, read once per connection for a bot that has one. */
   botPictures: Record<string, string>;
+  /** Each bot's threads as last read, by profile (`readThreads`, ADR 0205). A profile not read yet has none. */
+  threads: Record<string, ThreadShelf>;
   /** The switch to `profile` from `from`, until the new profile's list has been read. `error`: why it hasn't yet. */
   switching?: { from: string; error?: string };
   /** The display name Hermes keeps for its built-in `default` profile, as last listed; none when it has none. */
@@ -792,6 +799,14 @@ export class Hermes {
   private botChats = new BotChats((method, params) => this.request(method, params), APP_SOURCE);
   /** The Bot Chats the latest roster named, by profile: registry rows and lineage tips, which search leaves out. */
   private botChatIds = new Map<string, Set<string>>();
+  /** Lists, finds and starts threads, by title every time (threads.ts). */
+  private threads = new Threads((method, params) => this.request(method, params), APP_SOURCE);
+  /** How many threads this app has made, renamed or deleted in each profile. A listing asked for before the latest one may not show it (`readShelf`). */
+  private threadEdits = new Map<string, number>();
+  /** The read of each profile's threads under way. */
+  private shelfReads = new Map<string, Promise<void>>();
+  /** The thread sessions a chat list showed that this connection has already asked Hermes to hide (`hideStray`). */
+  private straysHidden?: { gen: number; ids: Set<string> };
   /** See `setVisitHome`. */
   private visitHome?: string;
   /** The roster read for the Bot Chats' ids on a connection (`knownBotChats`). */
@@ -1115,6 +1130,7 @@ export class Hermes {
       queues: loadQueues(cache, profile),
       branches: cache.loadBranches(profile),
       botPictures: {},
+      threads: {},
     };
   }
 
@@ -2152,7 +2168,7 @@ export class Hermes {
   }
 
   private leftOut(profile: string, r: SearchRow, archived: boolean): boolean {
-    return (!archived && this.isArchived(profile, r)) || this.deleted.has(profile, r.id) || this.isBotChatRow(profile, r);
+    return (!archived && this.isArchived(profile, r)) || this.deleted.has(profile, r.id) || this.apart(profile, r) !== undefined;
   }
 
   /**
@@ -2440,6 +2456,187 @@ export class Hermes {
       this.update({ chats: [...this.snapshot.chats, { id: openId, title: BOT_CHAT_TITLE, source: "app", settled: true, bot: true, updatedAt, items: [] }] });
     }
     return openId;
+  }
+
+  /**
+   * Reads the threads of each of `profiles` whose shelf is older than `olderThan` ms, three bots at a time, into
+   * `snapshot.threads`. A read that fails keeps the threads read before and says why (`ThreadShelf.error`).
+   */
+  async readThreads(profiles: readonly string[], olderThan = 0): Promise<void> {
+    const now = Date.now();
+    const due = [...new Set(profiles)].filter((p) => now - (this.snapshot.threads[p]?.at ?? 0) >= olderThan || this.snapshot.threads[p]?.error !== undefined);
+    const next = async (): Promise<void> => {
+      const profile = due.shift();
+      if (profile === undefined) return;
+      await this.readShelf(profile);
+      return next();
+    };
+    await Promise.all(Array.from({ length: SHELF_READS_AT_ONCE }, next));
+  }
+
+  private readShelf(profile: string): Promise<void> {
+    const flight = this.shelfReads.get(profile);
+    if (flight) return flight;
+    const run = this.listShelf(profile).finally(() => {
+      if (this.shelfReads.get(profile) === run) this.shelfReads.delete(profile);
+    });
+    this.shelfReads.set(profile, run);
+    return run;
+  }
+
+  private async listShelf(profile: string): Promise<void> {
+    for (let tries = 0; tries < SHELF_READ_TRIES; tries++) {
+      const edits = this.threadEdits.get(profile) ?? 0;
+      let shelf: ThreadShelf;
+      try {
+        shelf = await this.threads.list(profile);
+        if (shelf.capped) shelf = await this.withOlderThreads(profile, shelf);
+      } catch (e) {
+        const last = this.snapshot.threads[profile];
+        return this.setShelf(profile, { threads: last?.threads ?? [], at: last?.at ?? 0, capped: last?.capped ?? false, error: errorText(e) });
+      }
+      // A thread made, renamed or deleted here since the listing was asked for may be missing from it, so it is asked for again.
+      if ((this.threadEdits.get(profile) ?? 0) === edits) return this.setShelf(profile, shelf);
+    }
+  }
+
+  /**
+   * A listing that filled its window can't say a thread is gone. Each thread the shelf held that the listing lacks is
+   * looked up by its title, which has no window, and kept after the listed ones if Hermes still has it.
+   */
+  private async withOlderThreads(profile: string, shelf: ThreadShelf): Promise<ThreadShelf> {
+    const listed = new Set(shelf.threads.map((t) => t.title));
+    const older: BotThread[] = [];
+    for (const was of this.snapshot.threads[profile]?.threads ?? []) {
+      if (listed.has(was.title)) continue;
+      const found = await this.threads.find(profile, was.title);
+      if (found) older.push({ ...was, openId: found.openId, messageCount: found.messageCount });
+    }
+    return { ...shelf, threads: [...shelf.threads, ...older] };
+  }
+
+  private setShelf(profile: string, shelf: ThreadShelf) {
+    this.update({ threads: { ...this.snapshot.threads, [profile]: shelf } });
+  }
+
+  /** This app made, renamed or deleted a thread in `profile`: its shelf shows `change` at once, and is read again. */
+  private threadEdited(profile: string, change: (threads: BotThread[]) => BotThread[] = (t) => t) {
+    this.threadEdits.set(profile, (this.threadEdits.get(profile) ?? 0) + 1);
+    const shelf = this.snapshot.threads[profile];
+    if (shelf) this.setShelf(profile, { ...shelf, threads: change(shelf.threads) });
+    this.track(this.readShelf(profile));
+  }
+
+  /** Puts a thread's session beside the list, under its title, for a pane to open. The title keeps it out of the list and search. */
+  private showThread(thread: { openId: string; title: ThreadTitle; lastActive?: number }): string {
+    const { openId, title } = thread;
+    if (this.snapshot.chats.some((c) => c.id === openId)) this.patchChat(openId, (c) => (c.title === title ? c : { ...c, title }));
+    else {
+      this.revealed.add(openId);
+      this.update({ chats: [...this.snapshot.chats, { id: openId, title, source: "app", settled: true, updatedAt: thread.lastActive || Date.now(), items: [] }] });
+    }
+    return openId;
+  }
+
+  /**
+   * Opens a thread of the shown profile's bot: the session Hermes finds by the title now, which is its newest one
+   * after a compaction (threads.ts `Threads.find`). Its stored id is returned for a pane to open. Rejects when
+   * Hermes no longer has a thread with this title.
+   */
+  async openThread(bot: Bot, title: ThreadTitle): Promise<string> {
+    const profile = this.profile;
+    if (bot.profile !== profile) throw new Error(`Switch to ${bot.profile} first.`);
+    const found = await this.threads.find(profile, title);
+    if (!found) {
+      this.threadEdited(profile, (threads) => threads.filter((t) => t.title !== title));
+      throw new Error(`Hermes no longer has ${bot.name}'s thread “${threadTopic(title)}”.`);
+    }
+    if (this.profile !== profile) throw new Error(`Switched to the ${this.profile} profile before the thread opened.`);
+    return this.showThread(found);
+  }
+
+  /**
+   * New thread: opens one thread on `topic` with the shown profile's bot, started only when the topic has no empty
+   * one (threads.ts `Threads.start`), and returns its stored id for a pane to open. No message is sent.
+   */
+  async newThread(bot: Bot, topic: string): Promise<string> {
+    const profile = this.profile;
+    if (bot.profile !== profile) throw new Error(`Switch to ${bot.profile} first.`);
+    const inUse = (this.snapshot.threads[profile]?.threads ?? []).filter((t) => t.messageCount > 0).map((t) => t.title);
+    const started = await this.threads.start(profile, topic, inUse);
+    this.threadEdited(profile);
+    if (this.profile !== profile) throw new Error(`Switched to the ${this.profile} profile before the thread opened.`);
+    return this.showThread(started);
+  }
+
+  /**
+   * Renames a thread to `topic`, in any profile: the prefix stays, so it stays a thread. The session that holds the
+   * title is found by it first. Rejects when the thread is gone, the bot has another on that topic, or Hermes refuses.
+   */
+  async renameThread(thread: Pick<BotThread, "profile" | "title">, topic: string): Promise<ThreadTitle> {
+    const { profile } = thread;
+    const title = threadTitle(threadTopic(topic) ?? topic);
+    if (title === thread.title) return title;
+    const found = await this.threads.find(profile, thread.title);
+    if (!found) {
+      this.threadEdited(profile, (threads) => threads.filter((t) => t.title !== thread.title));
+      throw new Error(`Hermes no longer has the thread “${threadTopic(thread.title)}”.`);
+    }
+    try {
+      await this.fencedPatch(found.titleId, profile, { title }, await this.revision(found.titleId, profile));
+    } catch (e) {
+      if (titleInUse(e)) throw new Error(`This bot already has a thread on “${threadTopic(title)}”.`);
+      throw e;
+    }
+    this.threadEdited(profile, (threads) => threads.map((t) => (t.title === thread.title ? { ...t, title, topic: threadTopic(title)! } : t)));
+    if (profile === this.profile) for (const c of this.snapshot.chats) if (c.title === thread.title) this.retitled(c.id, title);
+    return title;
+  }
+
+  /**
+   * Deletes a thread from Hermes for good, in any profile: every session of it, found by its title. A thread open
+   * here leaves its pane. Resolves to whether Hermes deleted it; a thread with a reply running here isn't deleted.
+   */
+  async deleteThread(thread: Pick<BotThread, "profile" | "title">): Promise<boolean> {
+    const { profile, title } = thread;
+    const open = profile === this.profile ? this.snapshot.chats.filter((c) => c.title === title) : [];
+    if (open.some((c) => c.running)) return false;
+    const found = await this.threads.find(profile, title);
+    const gone = (threads: BotThread[]) => threads.filter((t) => t.title !== title);
+    if (!found) {
+      this.threadEdited(profile, gone);
+      return true;
+    }
+    const here = open.find((c) => c.id === found.openId);
+    // Hermes deletes a compacted thread's earlier sessions with its newest one (`include_compression_chain`).
+    const deleted = here ? await this.delete(here.id) : await this.fencedDelete(found.openId, profile).then(() => true);
+    if (!deleted) return false;
+    // A compacted thread's earlier session may still be open here under the title.
+    if (profile === this.profile && this.snapshot.chats.some((c) => c.title === title)) this.update({ chats: this.snapshot.chats.filter((c) => c.title !== title) });
+    this.threadEdited(profile, gone);
+    return true;
+  }
+
+  /**
+   * What the chat list and search leave out of a profile's rows (ADR 0066, ADR 0205): a thread, by its title, and the
+   * profile's Bot Chat (`isBotChatRow`). The thread title is read first: a thread branched from the Bot Chat may be
+   * reported with the Bot Chat as its lineage root, and is a thread all the same.
+   */
+  private apart(profile: string, r: { id: string; title?: string | null; lineage_root?: string; _lineage_root_id?: string | null }): "thread" | "botChat" | undefined {
+    return isThreadTitle(r.title) ? "thread" : this.isBotChatRow(profile, r) ? "botChat" : undefined;
+  }
+
+  /**
+   * A thread's session that a chat list of visible sessions reported isn't hidden: its hiding was cut short, or another
+   * client showed it. It is hidden again (`PATCH {hidden: true}`), once per session on a connection. The title alone
+   * already keeps it out of this app's list and search.
+   */
+  private hideStray(profile: string, id: string) {
+    if (this.straysHidden?.gen !== this.generation) this.straysHidden = { gen: this.generation, ids: new Set() };
+    const key = `${profile} ${id}`;
+    if (this.straysHidden.ids.has(key)) return;
+    this.straysHidden.ids.add(key);
+    this.track(this.patchSession(id, profile, { hidden: true }));
   }
 
   /**
@@ -3899,8 +4096,12 @@ export class Hermes {
     // A Bot Chat's title is how Hermes finds it, and a chat renamed to the title would become a bot's one chat (ADR 0066).
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (this.isStored(chatId)) throw new Error(JOB_RUN_READ_ONLY);
-    if (chat && policyOf(chat).rename === "none") throw new Error(BOT_CHAT_RENAME);
+    const renamed = chat ? policyOf(chat).rename : "title";
+    if (renamed === "none") throw new Error(BOT_CHAT_RENAME);
+    if (renamed === "topic") return this.renameThread({ profile: this.profile, title: chat!.title as ThreadTitle }, title);
     if (isBotChatTitle(title)) throw new Error(`“${BOT_CHAT_TITLE}” is the name Hermes gives each bot's one chat. Pick another name.`);
+    // A chat renamed into the pattern would leave the list and sit under the bot as a thread no one started (ADR 0205).
+    if (isThreadTitle(title)) throw new Error(`“${THREAD_PREFIX.trim()}” is how a bot's threads are named. Pick another name.`);
     const profile = this.profile;
     // Read in this order, a rename elsewhere either shows in the title or makes the revision stale.
     const revision = await this.revision(chatId, profile);
@@ -5461,10 +5662,12 @@ export class Hermes {
     const archivedListed = this.snapshot.archivedListed;
     const rows = new Map<string, SessionRow>();
     const botChats = new Set<string>();
+    const threads = new Map<string, string>();
     try {
       const recent = await this.readList(profile, "exclude", cutoff);
       for (const r of recent.rows) rows.set(r.id, r);
       for (const id of recent.botChats) botChats.add(id);
+      for (const [id, title] of recent.threads) threads.set(id, title);
       // Every page also carries the pinned chats that aren't archived; the list has them already.
       if (archivedListed) {
         const old = await this.readList(profile, "only", -Infinity);
@@ -5527,10 +5730,15 @@ export class Hermes {
     for (const id of listedIds) this.unstored.delete(profile, id);
     const holdsUnsent = (c: Chat) => c.items.some(isOutgoing) || !!this.snapshot.queues[c.id]?.items.length;
     // One Hermes now lists as a Bot Chat, such as an ordinary chat renamed to the title in another client, stays out
-    // of the list from now on, and is marked so every Bot Chat rule applies to it (ADR 0066).
+    // of the list from now on, and is marked so every Bot Chat rule applies to it (ADR 0066). One it now lists under
+    // a thread's title takes that title, which makes it a thread here too (ADR 0205).
     const onThisConnection = this.snapshot.chats
       .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(profile, c.id) || holdsUnsent(c)) && !listedIds.has(c.id))
-      .map((c) => (botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c));
+      .map((c) => {
+        const thread = threads.get(c.id);
+        if (thread !== undefined) return c.title === thread ? c : { ...c, title: thread };
+        return botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c;
+      });
     const chats = [...onThisConnection, ...listed];
     const wasUnlisted = !this.hasListed();
     this.listedAt = Date.now();
@@ -5559,9 +5767,16 @@ export class Hermes {
    * the list passes `cutoff`. Every page also carries all pinned rows, archived or not, out of order; the unpinned
    * ones follow recency. `sources`: only chats from these. `more`: the list goes on past the most pages read.
    */
-  private async readList(profile: string, archived: "exclude" | "only" | "include", cutoff: number, sources?: Source[]): Promise<{ rows: SessionRow[]; more: boolean; botChats: Set<string> }> {
+  private async readList(
+    profile: string,
+    archived: "exclude" | "only" | "include",
+    cutoff: number,
+    sources?: Source[],
+  ): Promise<{ rows: SessionRow[]; more: boolean; botChats: Set<string>; threads: Map<string, string> }> {
     const rows: SessionRow[] = [];
-    /** The Bot Chats the pages held, which the list leaves out (`isBotChatRow`). */
+    /** The threads the pages held, by session, with their titles. */
+    const threads = new Map<string, string>();
+    /** The Bot Chats the pages held, which the list leaves out (`apart`). */
     const botChats = new Set<string>();
     for (let page = 0; page < MAX_PAGES; page++) {
       const offset = page * PAGE_SIZE;
@@ -5576,11 +5791,21 @@ export class Hermes {
       const res = (await this.rest("GET", `api/sessions?${query}`)) as SessionPage;
       // A Bot Chat is opened from its bot's row only, never from the list (ADR 0066). Hermes lists them hidden, except
       // in the archived view, and one born visible elsewhere is still named "Bot Chat".
-      for (const r of res.sessions) (this.isBotChatRow(profile, r) ? botChats.add(r.id) : rows.push(r));
+      // A thread is opened from under its bot's row (ADR 0205). Only the archived view lists hidden sessions, so a
+      // thread any other view lists isn't hidden.
+      for (const r of res.sessions) {
+        const kind = this.apart(profile, r);
+        if (kind === "botChat") botChats.add(r.id);
+        else if (kind === undefined) rows.push(r);
+        else {
+          threads.set(r.id, r.title ?? "");
+          if (archived !== "only") this.hideStray(profile, r.id);
+        }
+      }
       const passedCutoff = res.sessions.some((r) => !r.pinned && lastActive(r) < cutoff);
-      if (passedCutoff || res.sessions.length === 0 || offset + PAGE_SIZE >= res.total) return { rows, more: false, botChats };
+      if (passedCutoff || res.sessions.length === 0 || offset + PAGE_SIZE >= res.total) return { rows, more: false, botChats, threads };
     }
-    return { rows, more: true, botChats };
+    return { rows, more: true, botChats, threads };
   }
 
   /**
@@ -5592,7 +5817,7 @@ export class Hermes {
     const query = new URLSearchParams({ profile, order: "recent", limit: String(OTHER_PAGE_SIZE), offset: "0", ...sourceQuery() });
     const res = (await this.rest("GET", `api/sessions?${query}`)) as SessionPage;
     const chats = res.sessions
-      .filter((r) => !r.archived && !this.deleted.has(profile, r.id) && !this.isBotChatRow(profile, r))
+      .filter((r) => !r.archived && !this.deleted.has(profile, r.id) && !this.apart(profile, r))
       .map((r): ListedChat => ({ id: r.id, title: listTitle(r), at: lastActive(r), unread: !!r.unread && lastActive(r) >= cutoff, source: toSource(r.source) }));
     // As in syncOnce: the page also carries every pinned row, and the unpinned ones follow recency.
     const passedCutoff = res.sessions.some((r) => !r.pinned && lastActive(r) < cutoff);
@@ -5638,7 +5863,7 @@ export class Hermes {
   private async patchSession(
     chatId: string,
     profile: string,
-    flags: { pinned?: boolean; unread?: boolean; archived?: boolean },
+    flags: { pinned?: boolean; unread?: boolean; archived?: boolean; hidden?: boolean },
     retry: () => Promise<boolean> = async () => true,
   ): Promise<void> {
     for (let attempt = 0; ; attempt++) {

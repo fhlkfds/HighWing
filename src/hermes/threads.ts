@@ -1,4 +1,5 @@
-import { isObj } from "./values";
+import { BotModeUnsupportedError, type BotRpc } from "./bots";
+import { errorText, isObj } from "./values";
 // A bot's threads (ADR 0205). A thread is another conversation with a bot besides its Bot Chat: a hidden session in the
 // bot's profile titled `Bot Thread: <topic>`. The profile and that title are its whole identity. Nothing about a thread
 // is kept on this computer, no parent link is read, and no session id outlives a read, so a thread stays under its bot
@@ -116,4 +117,105 @@ export function threadOf(r: Record<string, unknown>, profile: string): BotThread
     lastActive: num(r.last_active || r.started_at) * 1000,
     messageCount: num(typeof r.live_message_count === "number" ? r.live_message_count : r.message_count),
   };
+}
+
+/** How many of a profile's latest sessions one read of its threads asks for. Hermes sets no upper limit. */
+export const THREAD_WINDOW = 500;
+/** How many rows an exact title lookup asks for. The answer has at most one. */
+const LOOKUP_LIMIT = 200;
+/** How many titles New thread tries for one topic before it gives up. */
+const START_ROUNDS = 5;
+
+const NO_SUCH_METHOD = -32601;
+/** `session.title`'s code for a title another session holds. */
+const TITLE_IN_USE = 4022;
+const codeOf = (e: unknown) => (isObj(e) && typeof e.code === "number" ? e.code : undefined);
+export const titleInUse = (e: unknown) => codeOf(e) === TITLE_IN_USE || /already in use/i.test(errorText(e));
+
+/** A thread the exact-title lookup found. `titleId`: the session that holds the title, which a rename names. */
+export type FoundThread = BotThread & { titleId: string };
+
+/** A thread New thread opened: one it made, or the empty one the topic already had. */
+export type StartedThread = { title: ThreadTitle; openId: string; created: boolean };
+
+/**
+ * Lists, finds and starts threads over JSON-RPC: the thread twin of `BotChats`. `source`: the `source` this app stamps
+ * on sessions it starts. No session id is kept here: each open looks the thread up by its title again.
+ */
+export class Threads {
+  /** Starts under way, by profile and title, so a second Enter while one runs joins it. */
+  private flights = new Map<string, Promise<StartedThread>>();
+
+  constructor(
+    private readonly rpc: BotRpc,
+    private readonly source: string,
+  ) {}
+
+  /** The profile's threads among its latest THREAD_WINDOW sessions, hidden ones included. */
+  async list(profile: string): Promise<ThreadShelf> {
+    return shelfOf(await this.rpc("session.list", { profile, include_hidden: true, limit: THREAD_WINDOW }), profile, THREAD_WINDOW, Date.now());
+  }
+
+  /**
+   * The profile's thread with exactly this title, or null when Hermes has none. The lookup has no window, sees hidden
+   * sessions, and names the session the thread is in now. Fails closed, as `BotChats.find` does: an answer that isn't
+   * plainly a lookup of this title throws, so nothing is started on the strength of it.
+   */
+  async find(profile: string, title: ThreadTitle): Promise<FoundThread | null> {
+    let res: unknown;
+    try {
+      res = await this.rpc("session.list", { profile, title, include_hidden: true, limit: LOOKUP_LIMIT });
+    } catch (e) {
+      if (codeOf(e) === NO_SUCH_METHOD) throw new BotModeUnsupportedError("This Hermes can't look a chat up by its title, so it has no threads.");
+      throw new Error(`Couldn't look up the thread “${threadTopic(title)}”: ${errorText(e)}`);
+    }
+    const rows = isObj(res) && Array.isArray(res.sessions) ? (res.sessions as unknown[]) : undefined;
+    if (!rows || rows.some((r) => !isObj(r) || !text(r.id) || r.title !== title)) throw new Error(`Hermes answered the lookup of the thread “${threadTopic(title)}” in a way this app doesn't read.`);
+    const row = rows[0];
+    if (!isObj(row)) return null;
+    return { ...threadOf(row, profile)!, titleId: text(row.id) };
+  }
+
+  /**
+   * Opens one thread on `topic`: the empty thread the topic already has (a second Enter, or a start cut short), or a
+   * new one. A topic whose thread holds messages gets the next free title, `(2)`, `(3)`…; `taken` are titles known
+   * to be in use, which are skipped without asking. The new session is hidden from chat lists from the start,
+   * follows the profile's model, and is titled at once, which stores it. No message is sent.
+   */
+  start(profile: string, topic: string, taken: readonly string[]): Promise<StartedThread> {
+    const base = threadTitle(topic);
+    const key = `${profile}\n${base.toLowerCase()}`;
+    const flight = this.flights.get(key);
+    if (flight) return flight;
+    const run = this.resolve(profile, base, [...taken]).finally(() => {
+      if (this.flights.get(key) === run) this.flights.delete(key);
+    });
+    this.flights.set(key, run);
+    return run;
+  }
+
+  private async resolve(profile: string, base: ThreadTitle, taken: string[]): Promise<StartedThread> {
+    for (let round = 0; round < START_ROUNDS; round++) {
+      const title = freeTitle(base, taken);
+      const found = await this.find(profile, title);
+      if (found) {
+        if (found.messageCount === 0) return { title, openId: found.openId, created: false };
+        taken.push(title);
+        continue;
+      }
+      const made = await this.rpc("session.create", { profile, title, hidden: true, follow_profile_config: true, source: this.source });
+      const runtime = isObj(made) ? text(made.session_id) : "";
+      const stored = isObj(made) ? text(made.stored_session_id) : "";
+      if (!runtime || !stored) throw new Error(`Hermes didn't say which session it started for the thread “${threadTopic(title)}”.`);
+      try {
+        // A new session has no row until its first message. Naming it now stores it, hidden, under the title.
+        await this.rpc("session.title", { session_id: runtime, title });
+        return { title, openId: stored, created: true };
+      } catch (e) {
+        // Another client took the title between the lookup and now. The next round finds its thread.
+        if (!titleInUse(e)) throw new Error(`Hermes started the thread “${threadTopic(title)}” but didn't name it: ${errorText(e)}`);
+      }
+    }
+    throw new Error(`Hermes already has several threads on “${threadTopic(base)}”. Pick another topic.`);
+  }
 }
