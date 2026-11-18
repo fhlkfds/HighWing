@@ -81,7 +81,6 @@ it("starts a thread with New thread and one from a Bot Chat reply, and goes betw
 
   await botRow("Hermes").click();
   await expect.poll(head).toBe("HHermesBot Chat");
-  // The same words are the bot's preview in its row; the reply is the last of the two.
   await app.getByText(BOT_REPLY).last().hover();
   await app.getByRole("button", { name: "Thread from here" }).last().click();
   const dialog = app.getByRole("dialog", { name: "Thread from here" });

@@ -2894,7 +2894,6 @@ label.memory-pick { cursor: pointer; }
 .sb-bots .bots-row > .bots-new:hover { background: var(--raised-3); }
 .sb-bots .bots-row:hover .inbox-line > :not(.bots-name), .sb-bots .bots-row:focus-within .inbox-line > :not(.bots-name) { visibility: hidden; }
 .sb-bots .bots-hidden { padding: 4px 6px; }
-/* A bot's threads, under its row (ADR 0205): a disclosure, then the threads on a rule, as a tree's children. */
 .bots-threads { list-style: none; }
 .bots-threads-toggle { display: inline-flex; align-items: center; gap: 4px; margin: 2px 0 4px 46px; padding: 1px 6px 1px 2px; border-radius: 6px; font-size: calc(12rem / 14); color: var(--muted); }
 .bots-threads-toggle:hover { color: var(--text); background: var(--hover); }

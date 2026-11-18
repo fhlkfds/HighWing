@@ -1087,10 +1087,9 @@ type BotVisit = { home: string; before: string | null };
 
 /**
  * What opens once the profile switched to has listed its chats, unless the owner goes elsewhere first (`nav`): a bot's
- * Bot Chat (ADR 0066) or one of its threads (ADR 0205), the New chat pane, or the chat a bot visit left (ADR 0203).
+ * Bot Chat (ADR 0066), the New chat pane, or the chat a bot visit left (ADR 0203).
  */
 type Arrival = { profile: string; nav: number } & ({ open: "bot"; bot: Bot; thread?: ThreadArrival; opening?: boolean } | { open: "new" } | { open: "chat"; chatId: string });
-/** Which of a bot's threads an arrival opens in place of its Bot Chat (ADR 0205): the one with a title, or a new one on a topic. */
 type ThreadArrival = { title: ThreadTitle } | { new: string };
 
 /**
@@ -2340,7 +2339,6 @@ export function Main({
   // remembered for the next launch: what reopens a Bot Chat is its bot's row. The pen starts an ordinary chat there.
   const botEdit = useMemo<BotEditWiring>(() => ({ look: (name) => hermes.botLook(name), edit: (name, edits) => hermes.editBot(name, edits) }), [hermes]);
   const loadBots = useCallback(() => hermes.bots(), [hermes]);
-  /** The bots whose thread disclosures the owner opened or closed, for as long as the app runs (Threads.tsx). */
   const [threadsOpen, setThreadsOpen] = useState<Record<string, boolean>>({});
   const activityOf = (b: Bot, roster: readonly Bot[]) => {
     const ids = b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [];
@@ -2366,10 +2364,7 @@ export function Main({
     beforeBotChat.current = null;
   }, [profile]);
   const onBotChat = !!shownChat && chatKind(shownChat) === "bot";
-  /**
-   * `visiting`: what becomes of a bot visit (ADR 0203); none ends it, here or with the switch to the bot's profile.
-   * `thread`: one of the bot's threads opens in place of its Bot Chat.
-   */
+  /** `visiting`: what becomes of a bot visit (ADR 0203); none ends it, here or with the switch to the bot's profile. */
   const openBot = (b: Bot, then: "open" | "new", visiting?: BotVisit, thread?: ThreadArrival) => {
     guard(() => {
       if (then === "open" && !thread && b.profile === profile && !(shownChat && policyOf(shownChat).ofBot)) beforeBotChat.current = active.chatId;
@@ -3276,7 +3271,6 @@ export function Main({
   const shownThread = !covering && shownChat && isThreadTitle(shownChat.title) ? shownChat.title : undefined;
   const threadReads = {
     all: (olderThan: number) => hermes.readThreads(hermes.getSnapshot().bots?.roster.map((b) => b.profile) ?? [], olderThan),
-    // The shown bot's threads, and those of each bot whose disclosure the owner opened.
     watched: () => hermes.readThreads([profile, ...Object.keys(threadsOpen).filter((p) => threadsOpen[p])]),
   };
   const botActions = useBotActions({

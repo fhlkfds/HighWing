@@ -68,10 +68,6 @@ export type BranchAttempt = {
   model?: ModelPick;
   /** Set for an Edit or Regenerate: the branch is made through the owner's message, which it then replaces. */
   variant?: BranchVariant;
-  /**
-   * Set for "Thread from here" (ADR 0205): the branch is made under this title and hidden, as one of its bot's threads.
-   * It is found again by the title, gets no link back and isn't pinned.
-   */
   thread?: ThreadTitle;
 };
 

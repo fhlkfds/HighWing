@@ -1,12 +1,8 @@
-// What FakeHermes answers for the Hermes behaviour a bot's threads depend on (ADR 0205), as read from Hermes's source at
-// b200f5bc60: hidden sessions, titles as identity, named branches, the listing with hidden rows, and a compaction
-// that moves a chat to a new session.
 import { describe, expect, it } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";
 
 type Answer = { result?: Record<string, unknown>; error?: { code: number; message: string } };
 
-/** A raw connection to the fake: `call` sends one JSON-RPC request and answers what came back for it. */
 async function connected(setup: (server: FakeHermes) => void = () => {}) {
   const server = new FakeHermes();
   server.sessions = [row("side", 1, { title: "Disk usage" }), row("bot", 2, { title: "Bot Chat", hidden: true })];

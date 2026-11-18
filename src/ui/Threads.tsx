@@ -1,7 +1,3 @@
-// A bot's threads in Bots mode (ADR 0205): the disclosure under each bot's row, which says how many threads the bot
-// has and, open, lists them with New thread below. A thread row opens the thread, found by its title every time
-// (threads.ts); a right-click, Shift+F10 or the Menu key on it offers Rename and Delete. Every word comes from the
-// catalogue (ADR 0100).
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, MessagesSquare, Pencil, Plus, Trash2 } from "lucide-react";
 import type { Bot } from "../hermes/bots";
@@ -13,23 +9,17 @@ import { pick } from "./keybindings";
 import { MenuEntry } from "./ProfileSettings";
 import { useLocale } from "../i18n/locale";
 
-/** What Bots mode shows and does with the bots' threads. */
 export type BotThreads = {
-  /** Each bot's threads as last read, by profile; none for a bot not read yet. */
   shelves: Readonly<Record<string, ThreadShelf>>;
-  /** The thread on screen, which is one of the shown profile's bot. */
   shown?: ThreadTitle;
-  /** The disclosures the owner opened or closed, by profile. One never touched is open while its bot's Bot Chat or thread is on screen. */
   expanded: Readonly<Record<string, boolean>>;
   onExpand: (profile: string, open: boolean) => void;
   onOpen: (bot: Bot, title: ThreadTitle) => void;
   onNew: (bot: Bot, topic: string) => void;
-  /** Resolve once Hermes has answered; a failure is theirs to report. */
   onRename: (thread: BotThread, topic: string) => Promise<void>;
   onDelete: (thread: BotThread) => Promise<void>;
 };
 
-/** One line of text taken with Enter and left with Escape or by moving on: a new thread's topic, or a thread's new one. */
 function TopicField({ label, start = "", onTake, onLeave }: { label: string; start?: string; onTake: (topic: string) => void; onLeave: (by: "escape" | "blur") => void }) {
   const w = useLocale().threads;
   const [topic, setTopic] = useState(start);
@@ -46,7 +36,6 @@ function TopicField({ label, start = "", onTake, onLeave }: { label: string; sta
       onBlur={() => onLeave("blur")}
       onKeyDown={(e) => {
         if (composing(e)) return;
-        // The bots' list walks its rows with the arrows; here they move the caret.
         e.stopPropagation();
         if (e.key === "Escape") onLeave("escape");
         else if (e.key === "Enter" && topic.trim()) onTake(topic);
@@ -55,10 +44,6 @@ function TopicField({ label, start = "", onTake, onLeave }: { label: string; sta
   );
 }
 
-/**
- * The threads under one bot's row. `open`: its threads show. `shown`: the thread on screen, if it is this bot's.
- * `onOpen` and `onNew` may ask before leaving the shown profile (`BotList`).
- */
 export function ThreadDisclosure({
   bot,
   shelf,
@@ -86,11 +71,9 @@ export function ThreadDisclosure({
   const [menu, setMenu] = useState<{ thread: BotThread; x: number; y: number }>();
   const [renaming, setRenaming] = useState<ThreadTitle>();
   const [deleting, setDeleting] = useState<BotThread>();
-  /** The threads a rename or delete is under way for, which take no second one meanwhile. */
   const [busy, setBusy] = useState<readonly ThreadTitle[]>([]);
   const menuFrom = useRef<HTMLElement | null>(null);
   const root = useRef<HTMLLIElement>(null);
-  /** What takes focus once the next render has drawn it: a field left with Escape hands it back to what opened it. */
   const focusNext = useRef<string>(undefined);
   useEffect(() => {
     const selector = focusNext.current;
@@ -98,13 +81,11 @@ export function ThreadDisclosure({
     if (selector) root.current?.querySelector<HTMLElement>(selector)?.focus();
   });
 
-  // A shelf never read, or one whose only read failed, can't say the bot has no threads.
   const known = !!shelf && (shelf.at > 0 || !shelf.error);
   const count = known ? w.count(shelf.threads.length) : w.notRead;
   const during = (thread: BotThread, work: Promise<void>) => {
     setBusy((b) => [...b, thread.title]);
     void work.finally(() => {
-      // A deleted thread's row took focus with it.
       if (document.activeElement === document.body) focusNext.current = ".bots-threads-toggle";
       setBusy((b) => b.filter((t) => t !== thread.title));
     });

@@ -30,7 +30,6 @@ export function BranchButton({ onBranch, blocked }: { onBranch: () => void; bloc
   );
 }
 
-/** Under a message of a Bot Chat, beside Branch from here: opens the preview of a thread from it (ADR 0205). */
 export function ThreadButton({ onThread, blocked }: { onThread: () => void; blocked?: string }) {
   const w = useLocale().threads.from;
   return (
@@ -67,7 +66,6 @@ type State =
 const SHOWN_MESSAGES = 40;
 const whose = (role: "user" | "assistant") => (role === "user" ? "your message" : "Hermes's reply");
 
-/** What the dialog says that differs between a branch and a thread. `name`: the one field, a Title or a Topic. */
 type DialogWords = {
   icon: ReactNode;
   heading: string;
@@ -121,8 +119,6 @@ const threadWords = (w: Catalogue["threads"]["from"]): DialogWords => ({
  * the messages copied, what isn't copied (tool results), the files and images the messages refer to, and the model.
  * A file no longer on the server must be acknowledged before the branch can be made. `done` gets the new chat's id
  * and what couldn't be set on it; `onClose` closes without making one. Late answers after it closed change nothing.
- * `as`: `thread` for Thread from here (ADR 0205), whose one field is the thread's topic, offered from the message;
- * `api.make` then gets the topic.
  */
 export function BranchDialog({
   as = "branch",

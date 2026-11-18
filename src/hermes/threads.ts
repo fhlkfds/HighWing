@@ -1,28 +1,16 @@
 import { BotModeUnsupportedError, type BotRpc } from "./bots";
 import { errorText, isObj } from "./values";
-// A bot's threads (ADR 0205). A thread is another conversation with a bot besides its Bot Chat: a hidden session in the
-// bot's profile titled `Bot Thread: <topic>`. The profile and that title are its whole identity. Nothing about a thread
-// is kept on this computer, no parent link is read, and no session id outlives a read, so a thread stays under its bot
-// through a compaction of the Bot Chat, a compaction of the thread, a reinstall, and a second computer.
 
-/** The prefix every thread's title starts with. With `BOT_CHAT_TITLE`, the only two titles this app reserves. Never translated: Hermes stores it. */
 export const THREAD_PREFIX = "Bot Thread: ";
 /** The longest topic. Hermes takes a title of 100 characters; this leaves room for the prefix and a ` (99)`. */
 export const TOPIC_MAX = 80;
-/** How many characters of a message "Thread from here" offers as the topic. */
 const TOPIC_FROM_MESSAGE = 48;
 
-/** A title `threadTopic` accepts. Only `threadTitle`, `freeTitle` and `isThreadTitle` make one. */
 export type ThreadTitle = string & { readonly __thread: unique symbol };
 
 /** Hermes's name for a copy it makes of a titled session ("Bot Thread: VLAN plan #2"). */
 const NUMBERED_COPY = / #\d+$/;
 
-/**
- * The topic of a thread title, or undefined when the title isn't one. The one recogniser: the chat kind, the list and
- * search filters and the shelf parser all read it. A numbered copy isn't a thread: Hermes names the chat it makes on
- * Edit, Regenerate or Branch in a thread that way, and it is an ordinary visible chat, as "Bot Chat #2" is (ADR 0066).
- */
 export function threadTopic(title: unknown): string | undefined {
   if (typeof title !== "string" || !title.startsWith(THREAD_PREFIX)) return undefined;
   const topic = title.slice(THREAD_PREFIX.length).trim();
@@ -31,24 +19,18 @@ export function threadTopic(title: unknown): string | undefined {
 
 export const isThreadTitle = (title: unknown): title is ThreadTitle => threadTopic(title) !== undefined;
 
-/** A topic as a title holds it: one line, single spaces, at most TOPIC_MAX characters, and no ending Hermes reads as a numbered copy. */
 function tidyTopic(topic: string): string {
   let t = topic.replace(/\s+/g, " ").trim().slice(0, TOPIC_MAX).trim();
   while (NUMBERED_COPY.test(t)) t = t.replace(/ #(\d+)$/, " $1");
   return t;
 }
 
-/** The title of the thread on `topic`. Throws for a topic with nothing in it. */
 export function threadTitle(topic: string): ThreadTitle {
   const tidy = tidyTopic(topic);
   if (!tidy) throw new Error("A thread needs a topic.");
   return `${THREAD_PREFIX}${tidy}` as ThreadTitle;
 }
 
-/**
- * `title`, or the first of `title (2)`, `title (3)`… that `taken` lacks. Hermes holds titles apart by case, but this
- * skips a title that differs only in case too, so no two of a bot's threads read alike.
- */
 export function freeTitle(title: ThreadTitle, taken: readonly string[]): ThreadTitle {
   const held = new Set(taken.map((t) => t.toLowerCase()));
   if (!held.has(title.toLowerCase())) return title;
@@ -58,41 +40,27 @@ export function freeTitle(title: ThreadTitle, taken: readonly string[]): ThreadT
   }
 }
 
-/** The topic "Thread from here" offers: the message's first line with words in it, cut short. "" for a message without any. */
 export function topicFrom(messageText: string): string {
   const line = messageText.split("\n").find((l) => /[\p{L}\p{N}]/u.test(l)) ?? "";
   return tidyTopic(line.replace(/^[#>*\-\s]+/, "").slice(0, TOPIC_FROM_MESSAGE));
 }
 
-/** One thread as Hermes lists it. Times are Unix ms. No field is kept between reads. */
 export type BotThread = {
   profile: string;
   title: ThreadTitle;
   topic: string;
-  /** The first session of its lineage, which stays the same when Hermes compacts the thread into a new session. */
   rootId: string;
-  /** The session that held the thread at this read. Only a hint: opening looks the title up again. */
   openId: string;
   preview: string;
-  /** When Hermes last saw activity in it, or when it started for a Hermes whose listing doesn't say. */
   lastActive: number;
   messageCount: number;
 };
 
-/**
- * A bot's threads, in Hermes's order: last active first. `at`: when they were read. `capped`: the answer filled the
- * window asked for, so older threads may be missing. `error`: why the last read failed; `threads` is then the read
- * before it.
- */
 export type ThreadShelf = { threads: BotThread[]; at: number; capped: boolean; error?: string };
 
 const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
-/**
- * The threads in a `session.list {include_hidden}` answer, in its order. A row that isn't a thread is dropped, and so
- * is a second row with a title already seen. Throws for an answer that isn't a list of sessions.
- */
 export function shelfOf(result: unknown, profile: string, limit: number, at: number): ThreadShelf {
   const rows = isObj(result) && Array.isArray(result.sessions) ? (result.sessions as unknown[]) : undefined;
   if (!rows) throw new Error("Hermes answered the list of threads in a way this app doesn't read.");
@@ -105,15 +73,14 @@ export function shelfOf(result: unknown, profile: string, limit: number, at: num
   return { threads: [...threads.values()], at, capped: rows.length >= limit };
 }
 
-/** One listed row as a thread, or undefined for a row that isn't one or names no session. */
 export function threadOf(r: Record<string, unknown>, profile: string): BotThread | undefined {
   const id = text(r.id);
-  const topic = threadTopic(r.title);
-  if (!id || topic === undefined) return undefined;
+  const title = r.title;
+  if (!id || !isThreadTitle(title)) return undefined;
   return {
     profile,
-    title: r.title as ThreadTitle,
-    topic,
+    title,
+    topic: threadTopic(title)!,
     rootId: text(r._lineage_root_id) || id,
     openId: text(r.resolved_id) || id,
     preview: text(r.preview).replace(/\s+/g, " "),
@@ -122,31 +89,20 @@ export function threadOf(r: Record<string, unknown>, profile: string): BotThread
   };
 }
 
-/** How many of a profile's latest sessions one read of its threads asks for. Hermes sets no upper limit. */
 export const THREAD_WINDOW = 500;
-/** How many rows an exact title lookup asks for. The answer has at most one. */
 const LOOKUP_LIMIT = 200;
-/** How many titles New thread tries for one topic before it gives up. */
 const START_ROUNDS = 5;
 
 const NO_SUCH_METHOD = -32601;
-/** `session.title`'s code for a title another session holds. */
 const TITLE_IN_USE = 4022;
 const codeOf = (e: unknown) => (isObj(e) && typeof e.code === "number" ? e.code : undefined);
 export const titleInUse = (e: unknown) => codeOf(e) === TITLE_IN_USE || /already in use/i.test(errorText(e));
 
-/** A thread the exact-title lookup found. `titleId`: the session that holds the title, which a rename names. */
 export type FoundThread = BotThread & { titleId: string };
 
-/** A thread New thread opened: one it made, or the empty one the topic already had. */
 export type StartedThread = { title: ThreadTitle; openId: string; created: boolean };
 
-/**
- * Lists, finds and starts threads over JSON-RPC: the thread twin of `BotChats`. `source`: the `source` this app stamps
- * on sessions it starts. No session id is kept here: each open looks the thread up by its title again.
- */
 export class Threads {
-  /** Starts under way, by profile and title, so a second Enter while one runs joins it. */
   private flights = new Map<string, Promise<StartedThread>>();
 
   constructor(
@@ -154,16 +110,11 @@ export class Threads {
     private readonly source: string,
   ) {}
 
-  /** The profile's threads among its latest THREAD_WINDOW sessions, hidden ones included. */
   async list(profile: string): Promise<ThreadShelf> {
     return shelfOf(await this.rpc("session.list", { profile, include_hidden: true, limit: THREAD_WINDOW }), profile, THREAD_WINDOW, Date.now());
   }
 
-  /**
-   * The profile's thread with exactly this title, or null when Hermes has none. The lookup has no window, sees hidden
-   * sessions, and names the session the thread is in now. Fails closed, as `BotChats.find` does: an answer that isn't
-   * plainly a lookup of this title throws, so nothing is started on the strength of it.
-   */
+  /** Hermes's title lookup has no window, sees hidden sessions, and names the session the thread is in now. */
   async find(profile: string, title: ThreadTitle): Promise<FoundThread | null> {
     let res: unknown;
     try {
@@ -179,12 +130,6 @@ export class Threads {
     return { ...threadOf(row, profile)!, titleId: text(row.id) };
   }
 
-  /**
-   * Opens one thread on `topic`: the empty thread the topic already has (a second Enter, or a start cut short), or a
-   * new one. A topic whose thread holds messages gets the next free title, `(2)`, `(3)`…; `taken` are titles known
-   * to be in use, which are skipped without asking. The new session is hidden from chat lists from the start,
-   * follows the profile's model, and is titled at once, which stores it. No message is sent.
-   */
   start(profile: string, topic: string, taken: readonly string[]): Promise<StartedThread> {
     const base = threadTitle(topic);
     const key = `${profile}\n${base.toLowerCase()}`;
@@ -215,7 +160,6 @@ export class Threads {
         await this.rpc("session.title", { session_id: runtime, title });
         return { title, openId: stored, created: true };
       } catch (e) {
-        // Another client took the title between the lookup and now. The next round finds its thread.
         if (!titleInUse(e)) throw new Error(`Hermes started the thread “${threadTopic(title)}” but didn't name it: ${errorText(e)}`);
       }
     }

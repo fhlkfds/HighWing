@@ -1,7 +1,7 @@
 // The bots (ADR 0066), in the chat list's Bots mode (ADR 0195, ADR 0203): one row per bot, which is a Hermes profile,
 // with its picture, its name, its Bot Chat's last message and what it is doing. The name's tip is the bot's description.
 // A row opens the bot's Bot Chat, found by title every time (bots.ts); the pen beside it starts an ordinary chat in the
-// bot's profile. Under each row, a disclosure lists the bot's threads (Threads.tsx, ADR 0205). Above the rows, New bot makes a profile through Settings → Profiles' New profile form, and the new
+// bot's profile. Above the rows, New bot makes a profile through Settings → Profiles' New profile form, and the new
 // bot's row is shown once the roster is read again (ADR 0164); Reload reads the roster now. A right-click on a row
 // opens its menu (ADR 0194): Chat, Settings, Clone, Pin, Hide and Delete, through Settings → Profiles' own dialogs and
 // `Hermes.editBot`, which never writes over a change made elsewhere (ADR 0189). Every word comes from the catalogue
@@ -21,10 +21,9 @@ import { ThreadDisclosure, type BotThreads } from "./Threads";
 
 /** How often the roster is read again while the bots show. Hermes's desktop polls every 5 seconds; this is enough. */
 export const BOTS_REFRESH_MS = 15_000;
-/** A bot's threads read less than this long ago aren't read again when Bots mode opens. */
 export const THREADS_FRESH_MS = 60_000;
-/** How often every bot's threads are read again while the bots show: every this many roster reads, 5 minutes. */
-export const THREADS_EVERY_READS = 20;
+const THREADS_ALL_EVERY_MS = 5 * 60_000;
+export const THREADS_EVERY_READS = THREADS_ALL_EVERY_MS / BOTS_REFRESH_MS;
 
 const NO_SUBSCRIBE = () => () => {};
 const NO_SNAPSHOT = () => undefined;
@@ -55,10 +54,6 @@ async function dialogOn(profiles: Omit<ProfilesWiring, "showTab">, botEdit: BotE
  * panel's chat rows have (ADR 0194). Chat opens the bot as its row does. Settings is Edit bot. Settings and Delete read
  * the profile from `GET /api/profiles` as they open; only the entry picked last opens. `element`, the menu and every
  * dialog, is drawn outside Bots mode, so a delete that switches away from the open bot's profile runs to its end.
- *
- * `threads`: reads the bots' threads (`Hermes.readThreads`), after the roster. While the bots show, `all` reads every
- * bot's as Bots mode opens, unless read in the last THREADS_FRESH_MS, and again every THREADS_EVERY_READS roster
- * reads; `watched` reads the shown bot's and the open disclosures' with each roster read in between.
  *
  * `shown`: the bots show, so the roster is read now and every BOTS_REFRESH_MS. It is read again once a dialog closes,
  * and then a row whose focus went with it hands focus to the bot saved (under its new name after a rename), else the
@@ -111,14 +106,12 @@ export function useBotActions({
 
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
-  /** `everyThread`: also read each bot's threads not read in the last so many ms; otherwise only the watched bots'. */
   const read = async (everyThread?: number) => {
     const n = ++reads.current;
     try {
       await load();
       if (n === reads.current) setFailed(undefined);
       const t = threadsRef.current;
-      // A failed read shows under its own bot (`ThreadShelf.error`).
       if (t) void (everyThread === undefined ? t.watched() : t.all(everyThread)).catch(() => {});
     } catch (e) {
       if (n === reads.current) setFailed((e as Error).message);
@@ -342,8 +335,8 @@ export function useBotActions({
 
 /**
  * The bots' rows: pinned first, hidden ones behind a disclosure, Up and Down between them. A row in another profile
- * than `profile` asks first while `leaving` says what switching leaves behind, and so does a thread of such a bot.
- * `current`: the profile of the bot whose Bot Chat is open. `threads`: each bot's threads, drawn under its row.
+ * than `profile` asks first while `leaving` says what switching leaves behind.
+ * `current`: the profile of the bot whose Bot Chat is open.
  */
 export function BotList({
   bots,
@@ -374,7 +367,6 @@ export function BotList({
   const [showHidden, setShowHidden] = useState(false);
   const [asking, setAsking] = useState<{ bot: Bot; then: () => void }>();
 
-  /** Does `then` with a bot, after asking when it means leaving the shown profile with something unfinished there. */
   const going = (bot: Bot, then: () => void) => {
     if (bot.profile !== profile && leaving) return setAsking({ bot, then });
     setAsking(undefined);
@@ -510,7 +502,6 @@ function Row({
   activity: BotActivity;
   shown: boolean;
   current: boolean;
-  /** How many threads the bot has, once read. */
   threads?: number;
   onOpen: () => void;
   onNewChat: () => void;

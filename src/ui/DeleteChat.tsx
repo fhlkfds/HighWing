@@ -5,10 +5,7 @@ import { TriangleAlert } from "lucide-react";
 import { composing } from "./bits";
 import { useModal } from "./modal";
 
-/**
- * Escape, Cancel or a click outside keeps the chat. Focus goes back to `returnTo`, or to what had it. `words`: what
- * it says for something other than a chat, such as a bot's thread (ADR 0205).
- */
+/** Escape, Cancel or a click outside keeps the chat. Focus goes back to `returnTo`, or to what had it. */
 export function DeleteChatDialog({
   title,
   words,

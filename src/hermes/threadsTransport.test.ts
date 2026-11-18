@@ -1,6 +1,3 @@
-// A bot's threads through the real transport (transport.ts) against FakeHermes (ADR 0205): reading each bot's shelf,
-// New thread, opening by title, keeping threads out of the chat list and search, renaming and deleting, and what a
-// compaction of the Bot Chat or of a thread changes, which is nothing a thread is found by.
 import { afterEach, describe, expect, it } from "vitest";
 import { BOT_CHAT_TITLE, type Bot } from "./bots";
 import { FakeHermes, row } from "./fakeHermes";
@@ -13,7 +10,6 @@ afterEach(async () => {
   await Promise.all(running.splice(0).map((h) => h.close()));
 });
 
-/** Signed in to a server with the default profile and Scribe. Each has a Bot Chat; Scribe has one thread, "Changelog". */
 async function signedIn(setup: (server: FakeHermes) => void = () => {}) {
   const server = new FakeHermes();
   server.sessions = [row("side", 1, { title: "Disk usage" }), row("bot", 2, { title: BOT_CHAT_TITLE, hidden: true })];
@@ -89,7 +85,6 @@ describe("reading a bot's threads", () => {
     await hermes.readThreads(["default"]);
     expect(topics("default")).toEqual(["Backups", "VLAN plan"]);
     const list = server.handlers["session.list"];
-    // A busy profile: the window now ends before the two threads.
     server.handlers["session.list"] = (r) => (r.params.title === undefined ? server.respond(r.id, { sessions: Array.from({ length: THREAD_WINDOW }, (_, i) => ({ id: `c${i}`, title: `Chat ${i}` })) }) : list(r));
     server.sessions.splice(server.sessions.findIndex((s) => s.title === "Bot Thread: VLAN plan"), 1);
     await hermes.readThreads(["default"]);
@@ -102,7 +97,6 @@ describe("reading a bot's threads", () => {
     const { server, hermes, bot, topics } = await signedIn();
     const list = server.handlers["session.list"];
     const held: (() => void)[] = [];
-    // The first listing is answered as Hermes had it then, but only after New thread has finished.
     server.handlers["session.list"] = (r) => {
       if (r.params.title !== undefined || held.length) return list(r);
       const before = structuredClone(server.sessions);
@@ -340,10 +334,8 @@ describe("compaction", () => {
 });
 
 describe("Thread from here", () => {
-  /** The default bot's Bot Chat open, and the id of its reply. */
   async function inBotChat(setup?: (server: FakeHermes) => void) {
     const env = await signedIn((s) => {
-      // Stored with row ids, as Hermes stores them: a message is found in the chat's history by its row.
       s.transcripts.bot = [];
       s.storeMessage("bot", { role: "user", text: "Plan the VLANs" });
       s.storeMessage("bot", { role: "assistant", text: "Three VLANs: lab, home, guests." });
@@ -393,7 +385,6 @@ describe("Thread from here", () => {
     server.dropOnBranch = "stored";
     await expect(hermes.threadFromHere(preview, "VLAN plan")).rejects.toBeInstanceOf(BranchUnconfirmed);
     expect(hermes.getSnapshot().branches.attempts).toMatchObject([{ thread: "Bot Thread: VLAN plan" }]);
-    // The hide never went: the branch is still a visible session.
     expect(forks()).toMatchObject([{ title: "Bot Thread: VLAN plan" }]);
     expect(forks()[0].hidden).toBeUndefined();
 

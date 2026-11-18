@@ -73,7 +73,6 @@ const botRows = () => Array.from(document.querySelectorAll<HTMLButtonElement>(".
 const modeTab = (name: "Chats" | "Bots") => within(document.querySelector<HTMLElement>(".sidebar")!).getByRole("tab", { name: new RegExp(`^${name}`) });
 const listTitles = () => [...document.querySelectorAll(".sidebar .row-title")].map((e) => e.textContent);
 const toast = () => document.querySelector<HTMLElement>(".toast")?.textContent;
-/** The titles looked up one by one: a Bot Chat's or a thread's. The listings each bot's threads are read from have none. */
 const titleLookups = (server: FakeHermes) => server.requests.filter((r) => r.method === "session.list" && r.params.title !== undefined).map((r) => r.params.title);
 
 async function pickProfile(user: ReturnType<typeof userEvent.setup>, profile: string) {
@@ -1737,7 +1736,6 @@ describe("A bot's menu in the chat list panel", { timeout: 30_000 }, () => {
 });
 
 describe("Thread from here", () => {
-  /** Scribe's Bot Chat open, its two messages stored with row ids as Hermes stores them. */
   async function inScribesBotChat() {
     const env = await launch((s) => {
       s.transcripts["scribe-bot"] = [];
@@ -1796,7 +1794,6 @@ describe("A bot's threads", () => {
   const threadRow = (profile: string, topic: string) => within(under(profile)).getByRole("button", { name: new RegExp(`^${topic}`) });
   const threadsOf = (server: FakeHermes, profile: string) => server.store(profile)!.filter((s) => s.title?.startsWith("Bot Thread: ")).map((s) => s.title);
 
-  /** Bots mode on `default`, whose bot has a Bot Chat. Scribe has two threads, the default bot none unless `setup` adds one. */
   async function launchThreads(setup: (s: FakeHermes) => void = () => {}) {
     const env = await launch((s) => {
       s.sessions.push(row("hermes-bot", 0.02, { title: BOT_CHAT_TITLE, hidden: true, last_read_at: nowS() }));

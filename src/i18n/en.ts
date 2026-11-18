@@ -281,11 +281,9 @@ export const en = {
   threads: {
     badge: "Thread",
     badgeTip: "One of its bot's threads, on one topic",
-    /** A thread as its tab and the Inbox name it: its bot, then its topic. */
     named: (bot: string, topic: string) => `${bot} / ${topic}`,
     count: (n: number) => (n === 0 ? "No threads" : n === 1 ? "1 thread" : `${n} threads`),
     notRead: "Threads",
-    /** The disclosure under a bot's row, as a screen reader says it. */
     toggle: (bot: string, count: string) => `${bot}: ${count}`,
     of: (bot: string) => `${bot}'s threads`,
     new: "New thread",
@@ -305,14 +303,12 @@ export const en = {
       note: "This deletes the thread in every Hermes client, on every computer. It can't be undone.",
       confirm: "Delete thread",
     },
-    /** What `/new` typed in a thread says: a thread is compacted, as a Bot Chat is. */
     compact: {
       lead: "A thread is one continuous conversation, so /new compacts it instead of starting a new chat.",
       compacted: "Hermes compacted it.",
       nothing: "There was nothing to compact yet.",
       wait: "A thread is one continuous conversation, so /new compacts it. Wait for the reply to finish.",
     },
-    /** Thread from here: the action under a Bot Chat's message, and the preview it opens. */
     from: {
       action: "Thread from here",
       actionTip: "Start a thread with this bot from this point. The Bot Chat stays as it is.",

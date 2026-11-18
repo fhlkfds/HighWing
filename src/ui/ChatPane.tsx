@@ -553,7 +553,6 @@ export function ChatPane({
   const l = useLocale();
   const words = l.chat;
   const kind = chatKind(chat);
-  // A Bot Chat and a thread are headed by their bot, which is the shown profile's.
   const botOfChat = CHAT_POLICY[kind].ofBot ? bot : undefined;
   const topic = botOfChat && kind === "thread" ? threadTopic(chat.title) : undefined;
   const keys = useBindings();

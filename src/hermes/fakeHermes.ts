@@ -89,7 +89,6 @@ export type SessionRow = {
   chat_id?: string;
   user_id?: string;
   ended_at?: number | null;
-  /** Why the session ended: `compression` for one Hermes compacted into a new session. */
   end_reason?: string | null;
   is_active?: boolean;
 };
@@ -2893,7 +2892,6 @@ export class FakeHermes {
     return { session_id: runtimeId, stored_session_id: stored, title, parent, message_count: history.length, messages: shownHistory(history), info: { ...this.sessionInfo, ...this.defaultModel(this.profileOf(parent)) } };
   }
 
-  /** The profile whose store holds a stored session; `default` for one no store holds. */
   private profileOf(stored: string): string {
     return Object.entries(this.otherProfiles).find(([, rows]) => rows.some((s) => s.id === stored))?.[0] ?? "default";
   }
@@ -2925,10 +2923,6 @@ export class FakeHermes {
     this.runtime.set(runtimeId, tip);
   }
 
-  /**
-   * Stores a thread of a profile's bot as the app makes one (ADR 0205): a hidden session titled `Bot Thread: <topic>`.
-   * `hours`: how long ago it was last active. Answers its id.
-   */
   seedThread(profile: string, topic: string, { messages = [], hours = 1 }: { messages?: TranscriptMessage[]; hours?: number } = {}): string {
     const store = this.store(profile) ?? (this.otherProfiles[profile] = []);
     const id = `thread-${profile}-${store.length}`;

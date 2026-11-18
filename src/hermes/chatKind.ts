@@ -3,8 +3,8 @@ import type { Chat } from "./model";
 import { isThreadTitle } from "./threads";
 
 /**
- * `imported`: an Imported transcript (ADR 0031). `bot`: a bot's Bot Chat (ADR 0066). `thread`: one of a bot's threads
- * (ADR 0205). `jobRun`: the session Hermes ran a Scheduled job in, which Hermes takes no reply in.
+ * `imported`: an Imported transcript (ADR 0031). `bot`: a bot's Bot Chat (ADR 0066). `jobRun`: the session Hermes ran
+ * a Scheduled job in, which Hermes takes no reply in.
  */
 export type ChatKind = "ordinary" | "imported" | "bot" | "thread" | "jobRun";
 
@@ -23,20 +23,11 @@ export type ChatPolicy = {
   /** Edit and Regenerate. */
   replay: boolean;
   branch: boolean;
-  /** "Thread from here" on its replies. */
   threadFrom: boolean;
-  /** Pin and Archive: the chat list's own sorting, which a chat outside the list has none of. */
   organize: boolean;
-  /** Delete. */
   remove: boolean;
-  /** `title`: any title. `topic`: only the topic, the thread prefix stays. `none`: the title is how Hermes finds it, or the chat is read-only. */
   rename: "title" | "topic" | "none";
-  /**
-   * Opened from a bot's row and found by its title each time: it keeps a bot visit going, takes no title from its
-   * first message, and `/new` compacts it.
-   */
   ofBot: boolean;
-  /** A chat link opens it by its id. A chat found by its title has none. */
   link: boolean;
 };
 
