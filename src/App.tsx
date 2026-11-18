@@ -1,7 +1,7 @@
 import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
-import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, PanelLeft, PanelRight, PanelTop, Target, X } from "lucide-react";
-import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, TitleModelUnavailable, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type NoticeCard, type Notify } from "./hermes/transport";
+import { ArrowLeft, ArrowRight, Columns2, FolderCog, PanelBottom, PanelLeft, PanelRight, PanelTop, Target, X } from "lucide-react";
+import { CONNECT_STOPPED, RenameConflict, TitleModelUnavailable, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type NoticeCard, type Notify } from "./hermes/transport";
 import { TEXT_TASK } from "./hermes/modelSettings";
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandHost } from "./ui/SlashCommands";
@@ -56,10 +56,6 @@ import { desktopLinks, type LinkInbox } from "./hermes/tauriLinks";
 import { ChatLinkNotice, type LinkNoticeView } from "./ui/ChatLinkNotice";
 import { Inbox } from "./ui/Inbox";
 import { BotList, useBotActions, type BotEditWiring } from "./ui/Bots";
-import { Office } from "./ui/Office";
-import { EMPTY_OFFICE_MEMORY } from "./ui/OfficeBuilding";
-import { officeRooms, type Desk, type Room } from "./hermes/office";
-import type { SubagentId } from "./hermes/subagents";
 import { policyOf } from "./hermes/chatKind";
 import { jobRunTitle } from "./hermes/cronJobs";
 import { botActivity, botsWaiting, isBotChat, newInBotChatNote, type Bot } from "./hermes/bots";
@@ -113,15 +109,9 @@ import { TroubleshootStore, startTroubleshoot } from "./hermes/troubleshoot";
 import { CapabilityGate } from "./ui/Diagnostics";
 import { CAPABILITIES, guideUrl, type CapabilityId } from "./hermes/capabilities";
 import { useCapabilities } from "./ui/Diagnostics";
-import { Automations } from "./ui/Automations";
 import { tauriLocalTerminal, tauriTerminal } from "./ui/tauriTerminal";
 import { useShells } from "./ui/useShells";
 import { MAX_FOLDER_SHELLS, terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
-import { REPO_PATH_KEY, REPO_RECENT_KEY, REPO_TARGET_KEY, readRecent, remember, repoTarget } from "./hermes/repo";
-import { RepositoryScreen } from "./ui/Repository";
-import { startInWorktree, worktreeChats, type WorktreeChat, type WorktreeStart } from "./hermes/worktrees";
-import type { RepoApi } from "./hermes/repo";
-import { tauriRepo } from "./ui/tauriRepo";
 import { tauriScreenApps, type ScreenAppsInstaller } from "./ui/tauriScreenApps";
 import { ApplyDefaults, NewChatSettingsView } from "./ui/ProjectDefaultsNotes";
 import { appearanceStore } from "./ui/appearance";
@@ -144,20 +134,10 @@ import type { PreviewTarget } from "./hermes/preview";
 import { pathOpener } from "./hermes/paths";
 import type { Route } from "./hermes/pipe";
 import { tauriTray, type TrayWiring } from "./hermes/tauriTray";
-import { usePageHidden, useWindowHidden } from "./ui/windowState";
+import { useWindowHidden } from "./ui/windowState";
 import { getUIPrefs, setUIPrefs, subscribe as subscribeUIPrefs, toggleModelFavorite, type ChatListMode, type StickyModelPick } from "./hermes/uiPrefs";
 import { errorText } from "./hermes/values";
 import { BrandMark } from "./ui/BrandMark";
-
-/** Keeps the repository folder opened last, and the recent ones, on this computer (Repository screen, ADR 0110). */
-function rememberRepo(top: string) {
-  try {
-    localStorage.setItem(REPO_PATH_KEY, top);
-    localStorage.setItem(REPO_RECENT_KEY, JSON.stringify(remember(readRecent(localStorage.getItem(REPO_RECENT_KEY)), top)));
-  } catch {
-    // A full or unavailable localStorage only loses the memory of the folder.
-  }
-}
 
 /** Keeps a choice the owner made on this computer, such as an SSH target. */
 function rememberChoice(key: string, value: string) {
@@ -1092,10 +1072,6 @@ type Pane = {
   draftError?: string;
   picked?: { found: Found; at: number };
   jump?: JumpTarget;
-  /** A subagent of the chat `chatId` to open in its Subagents panel, from the agent office; `at` tells one request from the next. */
-  subagent?: { chatId: string; id: SubagentId; at: number };
-  /** The worktree a New chat pane starts its chat in, picked in the Repository screen (ADR 0043). */
-  worktree?: WorktreeStart;
 };
 
 /** Compare (ADR 0101): two panes whose sends go to both. Each side is a pane and the chat it shows; `model` is what a side's New chat pane starts on. */
@@ -1202,7 +1178,6 @@ export function Main({
   onLinkTaken,
   refs = savedConnectionRefs,
   tray = tauriTray,
-  repoApi = tauriRepo,
   screenApps = tauriScreenApps,
   localStt = tauriLocalStt,
   servers = [],
@@ -1283,8 +1258,6 @@ export function Main({
   /** Pages on the Hermes server's own loopback, through SSH (ADR 0114). */
   serverPages?: ServerPages;
   screenshots?: Screenshots;
-  /** The Repository screen's helper over ssh, and worktrees' (ADR 0110, 0043). */
-  repoApi?: RepoApi;
   /** The Screen's install of a terminal and a text editor over the connection's ssh (ADR 0193). */
   screenApps?: ScreenAppsInstaller;
   /** Speech to text on this computer and where each recording goes, decided by Rust (ADR 0065, 0067). */
@@ -1435,8 +1408,6 @@ export function Main({
   const [jobsOpen, setJobsOpen] = useState(false);
   /** The job the Scheduled jobs screen opens on, when something other than the rail opened it; `n` starts it again. */
   const [jobsAt, setJobsAt] = useState<{ id: string; n: number }>();
-  /** Automations (webhook routes, ADR 0108) cover the chat too. */
-  const [automationsOpen, setAutomationsOpen] = useState(false);
   // The side panel's Terminal (ADR 0022, ADR 0039): which shell is shown, kept in the prefs so it opens on the one picked
   // last (the Hermes server's until then, ADR 0051), the folder shells a reply's paths opened (ADR 0167), and which are
   // running, for the rail's dot.
@@ -1451,10 +1422,6 @@ export function Main({
   const terminalRunning = termRunning.server || termRunning.local;
   // The owner holds Hermes's screen: its computer use waits until they hand back, so the Screen tab says so.
   const [screenHeld, setScreenHeld] = useState(false);
-  // The Repository screen covers the chat panes too (ADR 0110).
-  const [repoOpen, setRepoOpen] = useState(false);
-  /** Where the Repository screen opens when a chat's worktree label opened it: that worktree's Worktrees view. */
-  const [repoAt, setRepoAt] = useState<{ target: string; path: string; view: "worktrees"; n: number }>();
   // The side panel's Files: the folder open last stays for this sign-in.
   const [filesPath, setFilesPath] = useState<string>();
   // Usage analytics covers the chat panes too (ADR 0026). It reads Hermes afresh each time it opens.
@@ -1469,8 +1436,7 @@ export function Main({
       guardRef.current(() => {
         setProjectOpen(false);
         setSettingsOpen(false);
-        setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-        setRepoOpen(false);
+        setJobsOpen(false);
         setWorkOpen(false);
         setUsageTab("budgets");
         setUsageOpen(true);
@@ -1582,8 +1548,6 @@ export function Main({
   const [inboxOpen, setInboxOpen] = useState(false);
   const [arrival, setArrival] = useState<Arrival>();
   const [visit, setVisit] = useState<BotVisit>();
-  /** The agent office (Office.tsx, ADR 0077), unless Settings turns it off. */
-  const [officeOpen, setOfficeOpen] = useState(false);
   const ackScope = inboxScope(connection);
   const acks = useMemo(() => inboxAcks(localStorage, ackScope), [ackScope]);
   const dismissed = useSyncExternalStore(acks.subscribe, acks.getSnapshot);
@@ -1594,12 +1558,8 @@ export function Main({
   // The model pick is sticky: new chats start on it, in this profile, until the owner picks another. It is kept on this
   // computer only and never becomes the profile's default. Picked in another profile, it gives way to this profile's
   // own model. A chat on screen shows the model it runs on, and a pick there switches that chat alone.
-  const { modelPicker, modelPicks, modelFavorites, previewWidth, sidebarWidth, screenshotShortcut, agentOffice, inboxAutoDismissDays, summonSelection, chatListMode } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
+  const { modelPicker, modelPicks, modelFavorites, previewWidth, sidebarWidth, screenshotShortcut, inboxAutoDismissDays, summonSelection, chatListMode } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
   const keys = useBindings();
-  const officeShown = officeOpen && agentOffice !== "off";
-  // Who sits where in the building. It outlives the building's view, so hidden to the tray, minimized, behind Settings
-  // or switched to List and back, each agent comes back to the desk it had.
-  const officeFloorMemory = useRef(EMPTY_OFFICE_MEMORY);
   const catalog = models?.profile === profile ? models : undefined;
   const sticky: ModelPick | undefined = modelPicks[pref] ?? (modelPicker?.profile === pref ? withoutProfile(modelPicker) : catalog?.defaultPick);
 
@@ -1798,8 +1758,7 @@ export function Main({
   };
   const openSettings = () => {
     setProjectOpen(false);
-    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-    setRepoOpen(false);
+    setJobsOpen(false);
     setUsageOpen(false); setWorkOpen(false);
     setShowTextGeneration(undefined);
     setShowMemory(undefined);
@@ -1937,23 +1896,20 @@ export function Main({
       fresh = false,
       keepSettings = false,
       newTab = false,
-      worktree,
-      subagent,
       picked,
-    }: { pane?: string; remember?: boolean; fresh?: boolean; keepSettings?: boolean; newTab?: boolean; worktree?: WorktreeStart; subagent?: SubagentId; picked?: Found } = {},
+    }: { pane?: string; remember?: boolean; fresh?: boolean; keepSettings?: boolean; newTab?: boolean; picked?: Found } = {},
   ) => {
     const go = () => {
       navGen.current++;
       setPanelHidden(true);
       if (newTab) setPanes((ps) => ps.map((p) => (p.key === pane && !p.tabs.includes(id) ? { ...p, tabs: [...p.tabs, id] } : p)));
-      patchPane(pane, { chatId: id, picked: picked && { found: picked, at: Date.now() }, jump: undefined, subagent: subagent && id ? { chatId: id, id: subagent, at: Date.now() } : undefined, worktree, ...(fresh && { draftError: undefined }) });
+      patchPane(pane, { chatId: id, picked: picked && { found: picked, at: Date.now() }, jump: undefined, ...(fresh && { draftError: undefined }) });
       activeKeyRef.current = pane;
       setActiveKey(pane);
       setReopening(undefined);
       if (!keepSettings) setSettingsOpen(false);
       setProjectOpen(false);
-      setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-      setRepoOpen(false);
+      setJobsOpen(false);
       setUsageOpen(false); setWorkOpen(false);
       if (remember) rememberChat(id);
     };
@@ -1969,9 +1925,6 @@ export function Main({
       setProjectOpen(false);
       setSettingsOpen(false);
       setUsageOpen(false); setWorkOpen(false);
-      setRepoOpen(false);
-      setAutomationsOpen(false);
-      setOfficeOpen(false);
       setJobsAt((a) => ({ id, n: (a?.n ?? 0) + 1 }));
       setJobsOpen(true);
     });
@@ -2000,29 +1953,17 @@ export function Main({
     [troubleshoots, hermes],
   );
 
-  /** Opens the Repository screen on a worktree's Worktrees view, as a chat's worktree label does (ADR 0043). */
-  const openRepository = (at: { target: string; path: string; view: "worktrees" }) =>
-    guard(() => {
-      setProjectOpen(false);
-      setSettingsOpen(false);
-      setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-      setUsageOpen(false); setWorkOpen(false);
-      setRepoAt((was) => ({ ...at, n: (was?.n ?? 0) + 1 }));
-      setRepoOpen(true);
-    });
-
   const pick = (found: Found) => guard(() => {
     navGen.current++;
     setPanelHidden(true);
     hermes.reveal(found);
-    patchPane(active.key, { chatId: found.chatId, picked: { found, at: Date.now() }, jump: undefined, subagent: undefined });
+    patchPane(active.key, { chatId: found.chatId, picked: { found, at: Date.now() }, jump: undefined });
     setReopening(undefined);
     rememberChat(found.chatId);
     setSearchOpen(false);
     setSettingsOpen(false);
     setProjectOpen(false);
-    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-    setRepoOpen(false);
+    setJobsOpen(false);
     setUsageOpen(false); setWorkOpen(false);
   });
 
@@ -2041,8 +1982,7 @@ export function Main({
     setReopening(undefined);
     setSettingsOpen(false);
     setProjectOpen(false);
-    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-    setRepoOpen(false);
+    setJobsOpen(false);
     setUsageOpen(false); setWorkOpen(false);
     rememberChat(chatId);
   });
@@ -2055,7 +1995,7 @@ export function Main({
     navGen.current++;
     setPanelHidden(true);
     const partner = panes.find((p) => p.key !== from)?.key ?? newPaneKey();
-    if (split) patchPane(partner, { chatId: null, picked: undefined, jump: undefined, subagent: undefined, worktree: undefined, draftError: undefined });
+    if (split) patchPane(partner, { chatId: null, picked: undefined, jump: undefined, draftError: undefined });
     else setPanes((ps) => [...ps, { key: partner, view: newView(), chatId: null, tabs: [null] }]);
     setCompare([{ pane: from, chatId: origin.chatId }, { pane: partner, chatId: null, model }]);
     activeKeyRef.current = from;
@@ -2099,8 +2039,7 @@ export function Main({
   );
   const openTextGeneration = () => {
     setProjectOpen(false);
-    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-    setRepoOpen(false);
+    setJobsOpen(false);
     setUsageOpen(false); setWorkOpen(false);
     // One destination at a time: an earlier Memory shortcut mustn't switch Settings away from this one.
     setShowMemory(undefined);
@@ -2115,8 +2054,7 @@ export function Main({
     flushSync(() => {
       setSettingsOpen(false);
       setProjectOpen(false);
-      setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-      setRepoOpen(false);
+      setJobsOpen(false);
       setUsageOpen(false); setWorkOpen(false);
       setSearchOpen(false);
       if (!previewFits) setPanelHidden(true);
@@ -2180,7 +2118,7 @@ export function Main({
     setPanelHidden(true);
     const panesNow = out.panes.map((p) => {
       const was = before.get(p.key);
-      return was && was.chatId !== p.chatId ? { ...p, view: newView(), picked: undefined, jump: undefined, subagent: undefined, worktree: undefined } : p;
+      return was && was.chatId !== p.chatId ? { ...p, view: newView(), picked: undefined, jump: undefined } : p;
     });
     panesRef.current = panesNow;
     setPanes(panesNow);
@@ -2376,15 +2314,6 @@ export function Main({
     if (e.server || e.ended || e.kind !== "approval" || e.profile !== profile || !e.itemId) return undefined;
     const card = chats.find((c) => c.id === e.chatId)?.items.find((i) => i.id === e.itemId);
     return card?.kind === "approval" && isWaiting(card) ? card : undefined;
-  };
-
-  // A reply's desk goes where its inbox entry goes. A subagent's desk is always in the profile shown (ADR 0077), and
-  // opens in the pane already showing its chat, or else the active one.
-  const openDesk = (room: Room, desk: Desk) => {
-    setOfficeOpen(false);
-    if (desk.agent.kind === "reply" && desk.agent.entry) return openEntry(desk.agent.entry);
-    const pane = panes.find((p) => p.chatId === room.chatId)?.key ?? active.key;
-    openChat(room.chatId, { pane, ...(desk.agent.kind === "subagent" && { subagent: desk.agent.id }) });
   };
 
   useEffect(() => {
@@ -2715,7 +2644,6 @@ export function Main({
   const trayInbox = useRef(() => {});
   trayInbox.current = () => {
     if (trayCovered()) return;
-    setOfficeOpen(false);
     setInboxOpen(true);
   };
   useEffect(() => tray.onNewChat(() => trayNewChat.current()), [tray]);
@@ -2724,9 +2652,6 @@ export function Main({
   useEffect(() => () => tray.reportInbox(0), [tray]);
   // Hidden to the tray, the window shows no chat: replies arriving meanwhile leave their chats Unread.
   const windowHidden = useWindowHidden();
-  const pageHidden = usePageHidden();
-  // The office is drawn, and its rooms worked out, only while it can be seen: hidden to the tray or minimized, it isn't.
-  const officeVisible = officeShown && !windowHidden && !pageHidden;
 
   // The inbox and Bots mode ask for fresh checks as they open, and keep asking while open: they show what is live.
   const liveWatched = inboxOpen || botsInList;
@@ -2736,14 +2661,6 @@ export function Main({
     const timer = setInterval(() => void hermes.checkOtherProfiles(), INBOX_CHECK_EVERY_MS);
     return () => clearInterval(timer);
   }, [hermes, liveWatched]);
-  // The office keeps every profile's floor live from `session.active_list` alone, as often as the transport allows,
-  // while it can be seen (ADR 0122). It leaves the heavier read of the other profiles' chat lists at CHECK_EVERY_MS.
-  useEffect(() => {
-    if (!officeVisible) return;
-    void hermes.checkLive();
-    const timer = setInterval(() => void hermes.checkLive(), LIVE_MIN_GAP_MS);
-    return () => clearInterval(timer);
-  }, [hermes, officeVisible]);
 
   // Unread chats in the other profiles are polled, so the switcher can be up to CHECK_EVERY_MS behind.
   useEffect(() => {
@@ -3047,7 +2964,7 @@ export function Main({
           return;
         case "focusLeft":
         case "focusRight":
-          if (!split || settingsOpen || jobsOpen || automationsOpen || repoOpen) return;
+          if (!split || settingsOpen || jobsOpen) return;
           e.preventDefault();
           focusPane(panes[command === "focusLeft" ? 0 : 1].key);
           return;
@@ -3062,9 +2979,7 @@ export function Main({
   const previewFits = !mainWidth || mainWidth >= CHAT_MIN_WIDTH + PANE_MIN_WIDTH;
   const paneMax = mainWidth ? mainWidth - CHAT_MIN_WIDTH : 1200;
   const paneWidth = Math.min(Math.max(dragWidth ?? previewWidth ?? PREVIEW_DEFAULT_WIDTH, PANE_MIN_WIDTH), Math.max(PANE_MIN_WIDTH, paneMax));
-  // Settings covers the chat, and the side panel with it; so do the project screen, Scheduled jobs, Automations, Usage
-  // and the Repository screen.
-  const covering = settingsOpen || projectScreenOpen || jobsOpen || automationsOpen || usageOpen || workOpen || repoOpen || officeVisible;
+  const covering = settingsOpen || projectScreenOpen || jobsOpen || usageOpen || workOpen;
   const previewShown = panelOpen && !covering && (previewFits || !panelHidden);
   const previewCovers = previewShown && !previewFits;
 
@@ -3164,7 +3079,6 @@ export function Main({
           picked={p.picked}
           jump={p.jump}
           focusItem={focusItem?.pane === p.key && focusItem.chatId === p.chatId ? focusItem : undefined}
-          showSubagent={p.subagent?.chatId === p.chatId ? p.subagent : undefined}
           active={!covered && !covering && !previewCovers && (!split || isActive)}
           split={split}
           screenshots={desk}
@@ -3185,12 +3099,6 @@ export function Main({
           shownProject={shownProject && { name: shownProject.name, defaults: proj.defaults[shownProject.id], has: !!listed && !!proj.chats[shownProject.id]?.includes(chat.id) }}
           where={where}
           server={serverBadge}
-          connectionName={hereLabel}
-          repoApi={repoApi}
-          scope={scope}
-          worktree={p.worktree?.scope === scope ? p.worktree : undefined}
-          onDropWorktree={() => patchPane(p.key, { worktree: undefined })}
-          onOpenWorktree={(w) => openRepository({ target: w.target, path: w.path, view: "worktrees" })}
           onStarting={() => {
             // A chat the owner starts here is one they opened, so it wins over an open still on its way (`navGen`),
             // from the moment they send, before Hermes has made it.
@@ -3201,7 +3109,7 @@ export function Main({
             // other pane if they went there meanwhile.
             if (panesRef.current.find((now) => now.key === p.key)?.view !== p.view) return;
             const stillActive = activeKeyRef.current === p.key;
-            patchPane(p.key, { chatId: id, picked: undefined, worktree: undefined });
+            patchPane(p.key, { chatId: id, picked: undefined });
             setCompare((c) => c?.map((s) => (s.pane === p.key ? { ...s, chatId: id } : s)) as Compare | undefined);
             setReopening(undefined);
             if (stillActive) rememberChat(id);
@@ -3227,8 +3135,7 @@ export function Main({
             hermes.memory
               ? () => {
                   setProjectOpen(false);
-                  setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-                  setRepoOpen(false);
+                  setJobsOpen(false);
                   setUsageOpen(false); setWorkOpen(false);
                   setShowTextGeneration(undefined);
                   setShowDiagnostics(undefined);
@@ -3381,21 +3288,6 @@ export function Main({
         onToggleList={() => setListOpen((o) => !o)}
         onNew={startNewChat}
         onSearch={() => openSearch()}
-        onOffice={
-          agentOffice === "off"
-            ? undefined
-            : () => {
-                setInboxOpen(false);
-                // Over Settings, it opens in Settings' place, as the rail's other screens do; otherwise it toggles.
-                if (settingsOpen)
-                  guard(() => {
-                    setSettingsOpen(false);
-                    setOfficeOpen(true);
-                  });
-                else setOfficeOpen((o) => !o);
-              }
-        }
-        officeOpen={officeShown && !settingsOpen}
         onSettings={openSettings}
         settingsOpen={settingsOpen}
         onJobs={() =>
@@ -3403,47 +3295,21 @@ export function Main({
             setProjectOpen(false);
             setSettingsOpen(false);
             setUsageOpen(false); setWorkOpen(false);
-            setRepoOpen(false);
-            setAutomationsOpen(false);
             setJobsAt(undefined);
             setJobsOpen(true);
           })
         }
         jobsOpen={jobsOpen && !settingsOpen}
-        onAutomations={() =>
-          guard(() => {
-            setProjectOpen(false);
-            setSettingsOpen(false);
-            setUsageOpen(false); setWorkOpen(false);
-            setRepoOpen(false);
-            setJobsOpen(false);
-            setOfficeOpen(false);
-            setAutomationsOpen(true);
-          })
-        }
-        automationsOpen={automationsOpen && !settingsOpen}
-        onRepo={() =>
-          guard(() => {
-            setProjectOpen(false);
-            setSettingsOpen(false);
-            setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-            setUsageOpen(false); setWorkOpen(false);
-            setRepoAt(undefined);
-            setRepoOpen((o) => !o);
-          })
-        }
-        repoOpen={repoOpen && !settingsOpen && !projectScreenOpen}
         onUsage={() =>
           guard(() => {
             setProjectOpen(false);
             setSettingsOpen(false);
-            setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-            setRepoOpen(false);
+            setJobsOpen(false);
             setWorkOpen(false);
             setUsageOpen((o) => !o);
           })
         }
-        usageOpen={usageOpen && !settingsOpen && !projectScreenOpen && !jobsOpen && !automationsOpen}
+        usageOpen={usageOpen && !settingsOpen && !projectScreenOpen && !jobsOpen}
         // Hidden for a Hermes without the kanban plugin, once the page that found out has closed.
         onWork={
           caps.caps.kanban.state === "unsupported" && !workOpen
@@ -3452,13 +3318,12 @@ export function Main({
                 guard(() => {
                   setProjectOpen(false);
                   setSettingsOpen(false);
-                  setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-                  setRepoOpen(false);
+                  setJobsOpen(false);
                   setUsageOpen(false);
                   setWorkOpen((o) => !o);
                 })
         }
-        workOpen={workOpen && !settingsOpen && !projectScreenOpen && !jobsOpen && !automationsOpen && !officeVisible}
+        workOpen={workOpen && !settingsOpen && !projectScreenOpen && !jobsOpen}
         updateWaiting={updateWaiting}
         connectionsMenu={
           onSwitchConnection && (
@@ -3541,8 +3406,7 @@ export function Main({
                   await projects.create(name);
                   guard(() => {
                     setSettingsOpen(false);
-                    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-                    setRepoOpen(false);
+                    setJobsOpen(false);
                     setUsageOpen(false); setWorkOpen(false);
                     setProjectOpen(true);
                   });
@@ -3550,8 +3414,7 @@ export function Main({
                 onManage={() =>
                   guard(() => {
                     setSettingsOpen(false);
-                    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-                    setRepoOpen(false);
+                    setJobsOpen(false);
                     setUsageOpen(false); setWorkOpen(false);
                     setProjectOpen(true);
                     void projects.readDefaults();
@@ -3659,41 +3522,7 @@ export function Main({
       )}
       <main className="main" ref={mainRef}>
         <div className="main-chat" inert={previewCovers || undefined}>
-            {officeVisible && !settingsOpen ? (
-              <Office
-                rooms={officeRooms({ entries: inbox.entries, shown: (e) => !acks.isDismissed(e, dismissed), chats, profile, connected: status === "connected" })}
-                floorMemory={officeFloorMemory}
-                view={agentOffice}
-                onView={(view) => setUIPrefs({ agentOffice: view })}
-                server={where ?? "the server"}
-                profile={profile}
-                profiles={Object.keys(others.byName)}
-                connected={status === "connected"}
-                leaving={leavingNote(profile, chats)}
-                onOpen={openDesk}
-                onClose={() => {
-                  flushSync(() => setOfficeOpen(false));
-                  focusPane(active.key);
-                }}
-              />
-            ) : automationsOpen && !settingsOpen ? (
-              <CapabilityGate
-                store={hermes.capabilities}
-                id="automations"
-                openGuide={openGuide}
-                onDiagnostics={openDiagnostics}
-                onClose={() => { flushSync(() => setAutomationsOpen(false)); focusPane(active.key); }}
-              >
-                <Automations
-                  key={profile}
-                  api={hermes.automations}
-                  profile={profile}
-                  connected={status === "connected"}
-                  onClose={() => { flushSync(() => setAutomationsOpen(false)); focusPane(active.key); }}
-                  onOpenChat={(id) => openChat(id)}
-                />
-              </CapabilityGate>
-            ) : jobsOpen && !settingsOpen ? (
+            {jobsOpen && !settingsOpen ? (
               <CapabilityGate
                 store={hermes.capabilities}
                 id="scheduledJobs"
@@ -3935,42 +3764,6 @@ export function Main({
             saveCsv={(csv, fileName) => invoke<string | null>("usage_export", { csv, fileName })}
             onClose={() => {
               flushSync(() => setUsageOpen(false));
-              focusPane(active.key);
-            }}
-          />
-        ) : repoOpen ? (
-          <RepositoryScreen
-            key={repoAt ? `at-${repoAt.n}` : "repo"}
-            api={repoApi}
-            initialTarget={repoAt?.target ?? repoTarget(sshAddressOf(connection), localStorage.getItem(REPO_TARGET_KEY), localStorage.getItem(terminalTargetKey(connection)))}
-            initialPath={repoAt?.path ?? localStorage.getItem(REPO_PATH_KEY) ?? ""}
-            initialView={repoAt?.view}
-            worktrees={{
-              profile,
-              connection: hereLabel,
-              chatTitle: (id) => hermes.getSnapshot().chats.find((c) => c.id === id)?.title,
-              hermesChatsIn: status === "connected" ? (path) => hermes.chatsWorkingIn(path) : undefined,
-              onStartChat:
-                status === "connected"
-                  ? (w) => {
-                      flushSync(() => setRepoOpen(false));
-                      openChat(null, { fresh: true, worktree: { ...w, scope } });
-                    }
-                  : undefined,
-            }}
-            recent={readRecent(localStorage.getItem(REPO_RECENT_KEY))}
-            suggestions={(shownProject?.folders ?? []).map((f) => ({ label: shownProject!.name, path: f.path }))}
-            onOpened={rememberRepo}
-            onTarget={(t) => rememberChoice(REPO_TARGET_KEY, t)}
-            suggest={
-              status === "connected"
-                ? (instructions, input) => hermes.askForEdit({ profile, instructions, input, maxTokens: 400 }).then((r) => r.text)
-                : undefined
-            }
-            suggestScope={scope}
-            openUrl={(url) => void webPages.openInBrowser(url).catch(() => undefined)}
-            onClose={() => {
-              flushSync(() => setRepoOpen(false));
               focusPane(active.key);
             }}
           />
@@ -4237,7 +4030,6 @@ function ChatView({
   picked,
   jump,
   focusItem,
-  showSubagent,
   active,
   split,
   catalog,
@@ -4252,12 +4044,6 @@ function ChatView({
   shownProject,
   where,
   server,
-  connectionName,
-  repoApi,
-  scope,
-  worktree,
-  onDropWorktree,
-  onOpenWorktree,
   onStarting,
   onStarted,
   onDraftError,
@@ -4300,8 +4086,6 @@ function ChatView({
   jump?: JumpTarget;
   /** The card or message an Inbox entry is about, which Main scrolls to and focuses once the chat shows it. */
   focusItem?: { itemId?: string; approval: boolean };
-  /** A subagent to open in the chat's Subagents panel, from the agent office. */
-  showSubagent?: { id: SubagentId; at: number };
   active: boolean;
   split: boolean;
   catalog?: ModelCatalog;
@@ -4320,16 +4104,6 @@ function ChatView({
   where?: string;
   /** The server and profile, in the chat's header while more than one connection is live (ADR 0125). */
   server?: string;
-  /** The connection's name, as a worktree's record names who started a chat in it. */
-  connectionName: string;
-  repoApi: RepoApi;
-  /** The connection and profile, as this computer keys what it keeps for each. */
-  scope: string;
-  /** The worktree this New chat pane starts its chat in (ADR 0043). */
-  worktree?: WorktreeStart;
-  onDropWorktree: () => void;
-  /** Opens the Repository screen's Worktrees view on the worktree a chat works in. */
-  onOpenWorktree: (w: WorktreeChat) => void;
   /** A send from the New chat pane is starting a chat, before Hermes has made it. */
   onStarting: () => void;
   onStarted: (id: string) => void;
@@ -4388,15 +4162,12 @@ function ChatView({
   useEffect(() => setChosen(undefined), [chatId, profile]);
   // No default for `project`: an explicit undefined is "no project", never the one this pane last drew.
   const settingsFor = (project: { name: string; defaults?: ProjectDefaults } | undefined) =>
-    resolveNewChat({ chosen: chosen ?? compare?.startModel, chosenFolder: worktree?.path, project, sticky, profilePick: catalog?.defaultPick, profileEffort: catalog?.defaultEffort });
+    resolveNewChat({ chosen: chosen ?? compare?.startModel, project, sticky, profilePick: catalog?.defaultPick, profileEffort: catalog?.defaultEffort });
   const startSettings = settingsFor(shownProject);
   const [applying, setApplying] = useState(false);
   useEffect(() => setApplying(false), [chatId]);
 
   const shownModel = (started && chat.model) || startSettings.model.value;
-  // The worktree this chat was started in from this computer, if it was (ADR 0043).
-  const inWorktreeKey = useSyncExternalStore(worktreeChats.subscribe, () => JSON.stringify(started ? (worktreeChats.get(scope, chat.id) ?? null) : null));
-  const inWorktree = useMemo(() => JSON.parse(inWorktreeKey) as WorktreeChat | null, [inWorktreeKey]);
   const pickModel = (pick: ModelPick) => {
     setUIPrefs({ modelPicker: { ...pick, profile: prefScope(connection, profile) } });
     if (!started) return setChosen(pick);
@@ -4428,25 +4199,7 @@ function ChatView({
       projects.reread();
       if (projects.getSnapshot().selectedId !== into) throw new Error("The project shown changed before the chat started. Nothing was sent.");
       const instructions = s.instructions.value && instructionsMessage(s.project ?? "", s.instructions.value);
-      let id: string;
-      if (worktree) {
-        // Its place in the worktree is held on the server before Hermes starts it, so the worktree can't be removed
-        // meanwhile; the chat runs there only if Hermes says it took the folder (newChat). Each wait on the server is
-        // a chance for the owner to switch profile: the chat must start in the profile it was written in, or not at all.
-        const w = worktree;
-        const begin = () => {
-          if (!stillIn()) return Promise.reject(new Error(`The profile changed to ${hermes.profile} before the chat started. Nothing was sent.`));
-          return hermes.newChat(s.model.value, { ...seed, instructions });
-        };
-        const started = await startInWorktree(repoApi, w, { profile, connection: connectionName }, begin);
-        id = started.chatId;
-        const noted = worktreeChats.set(scope, id, { target: w.target, repo: w.repo, id: w.id, path: w.path, branch: w.branch, token: started.token });
-        if (!stillIn())
-          throw new Error(`The profile changed to ${hermes.profile} while the chat was starting in ${w.path}. It started empty in the ${profile} profile; your message wasn't sent.`);
-        if (!noted)
-          onToast(`The chat started, but this computer couldn't note that it works in ${w.path}: its storage is full or unavailable. The chat's header won't name the worktree; the Repository screen's Worktrees view still does.`);
-        if (started.warning) onToast(started.warning);
-      } else id = await hermes.newChat(s.model.value, { ...seed, instructions });
+      const id = await hermes.newChat(s.model.value, { ...seed, instructions });
       context?.accepted(id);
       if (into && projects.getSnapshot().projects.some((p) => p.id === into)) projects.setChat(into, id, true);
       if (stillIn()) onStarted(id);
@@ -4789,13 +4542,12 @@ function ChatView({
       server={server}
       snoozedUntil={snoozedUntil}
       notice={
-        !started && (shownProject || worktree) ? (
+        !started && shownProject ? (
           <NewChatSettingsView
             settings={startSettings}
             where={where}
             profile={profile}
             problem={modelProblem(startSettings, catalog)}
-            worktree={worktree && { branch: worktree.branch, path: worktree.path, onDrop: onDropWorktree }}
           />
         ) : undefined
       }
@@ -4823,7 +4575,6 @@ function ChatView({
       findTarget={findTarget}
       jumpTo={jump}
       reveal={focusItem}
-      showSubagent={showSubagent}
       onJumpMissed={() =>
         onToast(jump?.rowId !== undefined ? "Couldn't find the message this branch was made from in the chat's history." : "Couldn't find the tool call that made this file in the chat's history.")
       }
@@ -4865,16 +4616,6 @@ function ChatView({
       onCheckpoints={sessionHere && caps.caps.checkpoints.state !== "unsupported" ? () => hermes.checkCheckpoints(chat.id) : undefined}
       headActions={
         <>
-          {started && inWorktree && (
-            <button
-              className="chip wt-chip"
-              title={`Works in the worktree ${inWorktree.path} on ${inWorktree.target}. Open it in the Repository screen.`}
-              aria-label={`Works in the worktree ${inWorktree.path}, on the branch ${inWorktree.branch}. Open it in the Repository screen`}
-              onClick={() => onOpenWorktree(inWorktree)}
-            >
-              <GitBranch size={13} aria-hidden /> <span className="mono">{inWorktree.branch}</span>
-            </button>
-          )}
           {sessionHere && missions.state === "supported" && (
             <button className="icon-btn" title={setGoalWhy ?? "Set a goal…"} aria-label="Set a goal" disabled={!!setGoalWhy} onClick={() => setSettingGoal({ outcome: "" })}>
               <Target size={16} />
