@@ -116,6 +116,8 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
   );
 }
 
+// Made once, not on each render: a new `pre` function is a new component type to React, which remounts every code
+// block on each streamed delta.
 const components: Components = {
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   a: ({ href, title, children, ...rest }) => {

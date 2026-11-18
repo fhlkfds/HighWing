@@ -55,6 +55,7 @@ export function InlineMarks({
     for (const p of LAYOUT) m.style[p] = cs[p];
     m.style.borderStyle = "solid";
     m.style.borderColor = "transparent";
+    // The textarea's scrollbar narrows its text; the mirror has none, so it gives the same width as padding.
     const bar = t.offsetWidth - t.clientWidth - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
     m.style.paddingRight = `${parseFloat(cs.paddingRight) + Math.max(0, bar)}px`;
     Object.assign(m.style, { left: `${t.offsetLeft}px`, top: `${t.offsetTop}px`, width: `${t.offsetWidth}px`, height: `${t.offsetHeight}px` });
