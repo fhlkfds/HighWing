@@ -1,7 +1,7 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar and composer, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
 import { createContext, Fragment, memo, type HTMLAttributes, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
-import { Archive, ArchiveRestore, ArrowUp, AtSign, Bot, Brain, CalendarClock, PackageCheck, Reply, Send, SquareTerminal, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Share2, Square, Trash2, Wrench, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUp, AtSign, Bot, Brain, CalendarClock, PackageCheck, Reply, Send, SquareTerminal, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Share2, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { decodeString } from "micromark-util-decode-string";
@@ -11,7 +11,7 @@ import { useLocale } from "../i18n/locale";
 import type { SkillCall } from "../hermes/skillCommands";
 import { BotFace, type BotLookShown } from "./BotFace";
 import { STEER, typedCommand } from "../hermes/commands";
-import type { ScreenshotDesk } from "../hermes/screenshots";
+import type { AttachmentDesk } from "../hermes/attachmentDesk";
 import type { Reference, ReferenceDesk } from "../hermes/chatReferences";
 import { ReferenceChips } from "./ReferenceChips";
 import { ApprovalCard } from "./ApprovalCard";
@@ -398,7 +398,7 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
  * Hermes is connected. `onRetry`, `onEdit` and `onDismiss` act on failed or unconfirmed messages. `modelControls`
  * contains the model picker; `footer` contains the status bar. Only the active pane answers Ctrl+F and takes focus as
  * it opens. Native drops attach to the pane under the pointer. Export, Copy chat link and Archive are in the header's More menu.
- * `screenshots` takes captures and keeps every chat's staged attachments; `screenshotKeys` names the shortcut.
+ * `desk` keeps every chat's staged attachments.
  * `voice` supplies Dictation and Read aloud. `voiceSend` puts a Voice conversation's turn in the chat as the owner's
  * message; it is left out for a chat not started yet, where a conversation can't start (ADR 0111). `commands` runs the slash commands typed in the composer. `queue` is the
  * chat's queue of messages waiting to go after its reply, and `queueApi` changes it; it is left out for a chat not
@@ -443,8 +443,7 @@ export function ChatPane({
   split = false,
   voice,
   voiceSend,
-  screenshots,
-  screenshotKeys,
+  desk,
   projects,
   server,
   bot,
@@ -516,8 +515,7 @@ export function ChatPane({
   split?: boolean;
   voice?: VoiceApi;
   voiceSend?: (text: string) => Promise<{ delivery: Delivery; itemId?: string }>;
-  screenshots: ScreenshotDesk;
-  screenshotKeys?: string;
+  desk: AttachmentDesk;
   /** The names of the projects the chat is in, or a new chat will be put in. */
   projects?: string[];
   /** The server and profile the chat is on, shown while more than one connection is live (ADR 0125). */
@@ -1228,8 +1226,7 @@ export function ChatPane({
         conversation={conversation}
         started={!!voiceSend}
         status={status}
-        screenshots={screenshots}
-        screenshotKeys={screenshotKeys}
+        desk={desk}
         commands={commands}
         references={references}
         followUp={compare ? undefined : followUp}
@@ -1858,8 +1855,7 @@ function Composer({
   conversation,
   started = false,
   status,
-  screenshots,
-  screenshotKeys,
+  desk,
   commands,
   references,
   followUp,
@@ -1898,9 +1894,7 @@ function Composer({
   conversation?: VoiceConversation;
   started?: boolean;
   status: ConnectionStatus;
-  /** Screenshots come from here, and it keeps the chat's staged attachments. */
-  screenshots: ScreenshotDesk;
-  screenshotKeys?: string;
+  desk: AttachmentDesk;
   commands?: CommandHost;
   /** The chats the message references, kept under `draftKey`. */
   references?: ComposerReferences;
@@ -1910,17 +1904,17 @@ function Composer({
 }) {
   const keys = useBindings();
   // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0145).
-  const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
+  const attachments = useSyncExternalStore(desk.subscribe, () => desk.stagedIn(draftKey));
   // Each staged image's number, which its mark in the words gives (inlineImages.ts, ADR 0200).
-  const numbers = useSyncExternalStore(screenshots.subscribe, () => screenshots.numbersIn(draftKey));
+  const numbers = useSyncExternalStore(desk.subscribe, () => desk.numbersIn(draftKey));
   // A number a mark in the words has given stays taken after the mark goes, since Undo can bring it back.
-  useEffect(() => screenshots.reserve(draftKey, highestMark(text)), [screenshots, draftKey, text]);
+  useEffect(() => desk.reserve(draftKey, highestMark(text)), [desk, draftKey, text]);
   const marks: ComposerMark[] = useMemo(() => {
     const by = new Map(attachments.flatMap((a) => (numbers.has(a.path) ? [[numbers.get(a.path)!, a] as const] : [])));
     return marksIn(text, (n) => by.has(n)).map((m) => ({ ...m, file: by.get(m.n)! }));
   }, [text, attachments, numbers]);
   const spellCheck = useSpellCheck();
-  const annotations = useSyncExternalStore(screenshots.subscribe, screenshots.annotationLabels);
+  const annotations = useSyncExternalStore(desk.subscribe, desk.annotationLabels);
   const refs = useSyncExternalStore(references?.desk.subscribe ?? noDesk, () => references?.desk.in(draftKey) ?? NO_REFERENCES);
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
@@ -2015,7 +2009,7 @@ function Composer({
   // Staged in this composer's chat even if it has closed meanwhile: the chat keeps what was added to it.
   const add = (paths: string[], at = anchorHere()) => busy(async () => {
     const got = await check(paths);
-    screenshots.change({ kind: "added", key: draftKey, attachments: got });
+    desk.change({ kind: "added", key: draftKey, attachments: got });
     place(at, got);
     return got.map((a) => a.path);
   });
@@ -2087,9 +2081,9 @@ function Composer({
   const place = (a: { key: string; at: number }, staged: readonly Attachment[]) => {
     anchors.current.delete(a);
     if (!alive.current || a.key !== draftKeyRef.current || !staged.length) return;
-    const numbered = screenshots.numbersIn(a.key);
+    const numbered = desk.numbersIn(a.key);
     const images = staged.filter((f) => f.kind === "image" && numbered.has(f.path));
-    const before = screenshots.stagedIn(a.key).some((f) => f.kind === "image" && !images.some((i) => i.path === f.path));
+    const before = desk.stagedIn(a.key).some((f) => f.kind === "image" && !images.some((i) => i.path === f.path));
     const marked = before ? images : images.slice(1);
     if (!marked.length) return;
     const now = textRef.current;
@@ -2107,18 +2101,12 @@ function Composer({
   const placeRef = useRef(place);
   placeRef.current = place;
 
-  // Screenshots attach here while this composer is on screen.
-  const shot = useSyncExternalStore(screenshots.subscribe, screenshots.getSnapshot);
-  // A new screenshot replaces the notes about the last thing attached.
-  useEffect(() => {
-    if (shot.capturing) setRefused([]);
-  }, [shot.capturing]);
   useEffect(() => {
     if (!autoFocus) return;
     let current = true;
     const pending = anchors.current;
     const placing = new Map<string, { key: string; at: number }>();
-    const stop = screenshots.attachTo({
+    const stop = desk.attachTo({
       key: draftKey,
       chat: chatTitle,
       check: (paths) =>
@@ -2142,7 +2130,7 @@ function Composer({
       for (const at of placing.values()) pending.delete(at);
       stop();
     };
-  }, [screenshots, autoFocus, draftKey, chatTitle]);
+  }, [desk, autoFocus, draftKey, chatTitle]);
 
   // Tauri's native drop event (off on Windows, below): it gives real file paths, so Rust can read the bytes. Every composer
   // hears every drop; with two panes, the one under the pointer takes it. Tauri gives the point in physical pixels.
@@ -2161,7 +2149,7 @@ function Composer({
     return () => void unlisten.then((stop) => stop());
   }, []);
 
-  // A pasted file, or one dropped on Windows, has no path of its own: Rust stages its bytes with the screenshots. One
+  // A pasted file, or one dropped on Windows, has no path of its own: Rust stages its bytes in the captures folder. One
   // too big for Hermes is refused before its bytes are read into the webview.
   const stageFiles = (incoming: File[] | Promise<File[]>, nameOf = pastedName) => busy(async () => {
     const at = anchorHere();
@@ -2176,14 +2164,14 @@ function Composer({
           ),
       );
       const paths = saved.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-      screenshots.own(paths);
+      desk.own(paths);
       const failed = saved.find((r): r is PromiseRejectedResult => r.status === "rejected");
       if (failed) {
-        screenshots.release(paths);
+        desk.release(paths);
         throw failed.reason;
       }
       const kept = await add(paths, at);
-      screenshots.release(paths.filter((p) => !kept.includes(p)));
+      desk.release(paths.filter((p) => !kept.includes(p)));
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
@@ -2260,10 +2248,10 @@ function Composer({
   }, [text]);
 
   const sendable = attaching === 0 && (!!text.trim() || attachments.length > 0);
-  // Removing a marked image takes its marks out of the words too, as one edit, so no dead mark is left behind (ADR 0212).
+  // Removing a marked image takes its marks out of the words too, as one edit, so no dead mark is left behind (ADR 0213).
   const removeFile = (path: string) => {
-    const n = screenshots.numbersIn(draftKey).get(path);
-    screenshots.change({ kind: "removed", key: draftKey, paths: [path] });
+    const n = desk.numbersIn(draftKey).get(path);
+    desk.change({ kind: "removed", key: draftKey, paths: [path] });
     if (n === undefined) return;
     const next = withoutMarks(textRef.current, new Set([n]));
     if (next !== textRef.current) onText(next);
@@ -2358,7 +2346,7 @@ function Composer({
       if (offline || running) return;
       go([...attachments]);
     }
-    screenshots.change({ kind: "sent", key: draftKey, paths: attachments.map((a) => a.path) });
+    desk.change({ kind: "sent", key: draftKey, paths: attachments.map((a) => a.path) });
     setRefused(fellBack ? [fellBack] : []);
   };
   // What Enter, and the button beside the text, do now; Ctrl+Enter does the other while a reply runs.
@@ -2413,11 +2401,6 @@ function Composer({
             requestAnimationFrame(() => (startTalkRef.current ?? taRef.current)?.focus());
           }}
         />
-      )}
-      {shot.capturing && (
-        <div className="capture-note" role="status">
-          Taking a screenshot: select a region or window, or press Esc to cancel.
-        </div>
       )}
       {refused.map((r, i) => (
         <div key={i} className="attach-note" role="alert">
@@ -2539,15 +2522,6 @@ function Composer({
               }}
             />
           )}
-          <button
-            className="icon-btn"
-            title={screenshotKeys ? `Attach a screenshot (${screenshotKeys})` : "Attach a screenshot"}
-            aria-label="Attach a screenshot"
-            disabled={shot.capturing}
-            onClick={() => void screenshots.capture()}
-          >
-            <Camera size={16} />
-          </button>
           {modelControls}
           {!dictation.active && (
             <span className="composer-keys" title={steerWhy && `Can't steer now: ${steerWhy}`}>
