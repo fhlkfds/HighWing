@@ -843,20 +843,31 @@ export function approvalsFrom(result: unknown): Pick<Capability, "state" | "why"
 const SHARED_CHATS_SINCE = [0, 21, 3];
 
 /**
+ * The oldest Hermes release known to have `message_agent` behind the Bot Mode block gate (`tools/bot_mode_dm.py`
+ * `message_agent_authorized`): every tag from v0.21.6 to v0.23.2 has it. No older tag was available to check.
+ */
+const BOT_MESSAGING_SINCE = [0, 21, 6];
+
+function atLeast(f: ServerFacts, since: readonly number[]): boolean | undefined {
+  const v = /^v?(\d+)\.(\d+)\.(\d+)/.exec(f.version ?? f.build ?? "");
+  if (!v) return undefined;
+  for (let i = 0; i < 3; i++) {
+    const d = Number(v[i + 1]) - since[i];
+    if (d) return d > 0;
+  }
+  return true;
+}
+
+/**
  * Whether Hermes shares a chat between the clients that have it open: each gets every server request, and the first
  * answer settles it, an error included (ADR 0125). `declines_not_shown` came later, so it says so before the version
  * is read.
  */
 export function sharesChats(f: ServerFacts): boolean {
-  if (f.declinesNotShown) return true;
-  const v = /^v?(\d+)\.(\d+)\.(\d+)/.exec(f.version ?? f.build ?? "");
-  if (!v) return false;
-  for (let i = 0; i < 3; i++) {
-    const d = Number(v[i + 1]) - SHARED_CHATS_SINCE[i];
-    if (d) return d > 0;
-  }
-  return true;
+  return !!f.declinesNotShown || (atLeast(f, SHARED_CHATS_SINCE) ?? false);
 }
+
+export const predatesBotMessaging = (f: ServerFacts) => atLeast(f, BOT_MESSAGING_SINCE) === false;
 
 /** What a failed `client.capabilities` means for Approvals. A Hermes without it is older than the requests this app reads. */
 export function approvalsFailed(e: unknown): Pick<Capability, "state" | "why"> {
