@@ -78,7 +78,7 @@ export class Previews {
 
 /**
  * A staged attachment. An image whose preview is read, or still being read, is a square thumbnail with Remove over its
- * corner (ADR 0211). A file, or an image that couldn't be read or shown, is a small chip with a paperclip.
+ * corner (ADR 0212). A file, or an image that couldn't be read or shown, is a small chip with a paperclip.
  * `annotation`: where an annotation's image came from, and whether the Preview's page has moved since (ADR 0094).
  */
 export function AttachmentChip({ file, preview, annotation, onRemove }: { file: Attachment; preview?: Preview; annotation?: AnnotationLabel; onRemove: () => void }) {
@@ -144,7 +144,7 @@ export function SentImages({ images, offline }: { images: readonly SentImage[]; 
 }
 
 /**
- * An image a mark places in a message's words (ADR 0211): a pill with a tiny thumbnail once its image is read, else an
+ * An image a mark places in a message's words (ADR 0212): a pill with a tiny thumbnail once its image is read, else an
  * image icon, and the name the mark gives it. It opens the image in the Preview as the picture above the words does.
  * Hermes keeps no size, so none is shown.
  */

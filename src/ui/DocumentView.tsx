@@ -5,10 +5,8 @@ import { sandboxedHtml } from "../hermes/preview";
 import { errorText, formatBytes } from "../hermes/values";
 import { Spinner } from "./bits";
 
-/** The most pages of a PDF drawn, so a long one can't hold hundreds of page-sized images. */
 const PDF_MAX_PAGES = 100;
 
-/** How a Word document's HTML reads in its frame: a page-like column, its tables ruled. */
 const DOCX_STYLE = `<style>
 body { margin: 0; padding: 28px 32px 48px; font: 15px/1.6 system-ui, sans-serif; color: #1f2328; background: #fff; overflow-wrap: anywhere; }
 main { max-width: 760px; margin: 0 auto; }
@@ -20,7 +18,6 @@ td > p, th > p { margin: 0; }
 
 type Drawn = { loading: true } | { error: string } | { done: true; pages?: number };
 
-/** A PDF or Word file the Preview draws itself (ADR 0186), or why it couldn't. */
 export function DocumentView({ format, bytes, name, size }: { format: DocumentFormat; bytes: Uint8Array; name: string; size: number }) {
   const [state, setState] = useState<Drawn>({ loading: true });
   const [html, setHtml] = useState<string>();
