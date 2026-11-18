@@ -714,13 +714,17 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .inline-marks {
   position: absolute; overflow: hidden; pointer-events: none; color: transparent; margin: 0; z-index: 1;
 }
-.inline-mark {
-  position: absolute; display: flex; align-items: center; gap: 4px; overflow: hidden; white-space: nowrap; border-radius: 6px;
-  background: var(--raised-2); color: var(--text-2); font-size: 0.82em; padding: 0 4px 0 2px;
+/* The chip covers the whole mark in the composer's colour; the pill inside is only as wide as what it shows. */
+.inline-mark { position: absolute; display: flex; align-items: center; overflow: hidden; background: var(--raised); }
+.inline-mark-pill {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 100%; overflow: hidden; white-space: nowrap;
+  border-radius: 6px; background: var(--raised-2); color: var(--text-2); font-size: 0.86em; padding: 0 6px 0 3px;
 }
-.inline-mark img, .inline-mark-blank { height: calc(100% - 4px); aspect-ratio: 1; border-radius: 4px; object-fit: cover; flex: none; background: var(--line-2); }
+.inline-mark img, .inline-mark-blank { height: calc(100% - 6px); aspect-ratio: 1; border-radius: 4px; object-fit: cover; flex: none; background: var(--line-2); }
 .inline-mark-name { color: var(--accent); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.inline-mark-size { color: var(--muted); font-size: 0.85em; flex: none; }
+.inline-mark-size { color: var(--muted); font-size: 0.82em; flex: none; }
+/* The other lines of a mark that wraps: the composer's own colour over the raw words, so only the chip shows. */
+.inline-mark-cover { position: absolute; background: var(--raised); }
 .composer-bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .composer-bar > .icon-btn, .composer-bar > .send { flex: none; }
 .composer-keys { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: calc(12rem / 14); color: var(--faint); opacity: 0; transition: opacity 0.2s; }
@@ -1307,6 +1311,14 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
   display: inline-flex; align-items: center; gap: 6px; background: var(--raised-2); border-radius: 8px; padding: 4px 6px 4px 9px;
   font-size: calc(12.5rem / 14); color: var(--text-2); max-width: 260px;
 }
+.chip.chip-card { position: relative; display: block; width: 88px; height: 88px; padding: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--line-2); background: var(--raised-2); }
+.chip-card-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.chip-card-blank { background: var(--raised-2); }
+.chip-card button { position: absolute; top: 5px; right: 5px; width: 26px; height: 26px; border-radius: 7px; background: rgba(0, 0, 0, 0.62); color: #fff; }
+.chip-card button svg { width: 15px; height: 15px; }
+.chip-card button:hover { background: rgba(0, 0, 0, 0.82); color: #fff; }
+.chip-card button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip-card-note { position: absolute; left: 4px; bottom: 4px; padding: 1px 5px; border-radius: 5px; background: rgba(0, 0, 0, 0.62); }
 .chip-thumb { width: 28px; height: 28px; margin: -2px 0 -2px -5px; border-radius: 5px; object-fit: cover; flex: none; }
 .chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-files { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
@@ -1328,9 +1340,15 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .sent-image-why { flex-basis: 100%; color: var(--muted); overflow-wrap: anywhere; }
 .msg.user.sending .msg-images { opacity: 0.6; }
 /* An image placed in a message's words by its mark (inlineImages.ts): small, on the line it was put on. */
-.inline-image { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; max-width: 100%; white-space: normal; }
-.inline-image .sent-image img { max-height: 120px; }
-.inline-image .sent-image-loading { width: 96px; }
+.inline-image {
+  display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; max-width: 100%; padding: 1px 7px 1px 3px; border-radius: 6px;
+  background: var(--raised-2); color: var(--accent); font-size: 0.86em; line-height: 1.5;
+}
+.inline-image:disabled { cursor: default; }
+.inline-image:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.inline-image img { width: 1.3em; height: 1.3em; border-radius: 4px; object-fit: cover; flex: none; }
+.inline-image svg { flex: none; color: var(--muted); }
+.inline-image-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 .chip-size { color: var(--faint); font-size: calc(12rem / 14); }
 .chip button { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: var(--muted); }

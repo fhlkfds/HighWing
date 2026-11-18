@@ -1,7 +1,7 @@
 // Where a message's images go in its words (ADR 0200). Hermes stores a message's words as they were sent and its images
 // as `@image:` lines after them, in the order they were attached (`peelImages`), so a mark in the words, such as
 // `[image 2: shot.png]`, says where the second image goes. The model reads the same mark beside the images it is sent.
-// An image no mark names is shown above the words, as every image was before.
+// A sent message shows every image above its words, and each mark as a pill in them (ADR 0220).
 import type { Attachment, SentImage } from "./model";
 
 /** A mark in a message's words: the image it places (`n`, counted from 1) and the name it shows. */
@@ -57,10 +57,9 @@ export function sentText(text: string, attachments: readonly Attachment[], numbe
 /** A piece of a sent message's words: words, or the image a mark places there with the name the mark gives it. */
 export type Piece = string | { image: SentImage; name: string };
 
-/** A sent message's words split at its images' marks, and the images no mark places, which go above the words. */
-export function placeImages(text: string, images: readonly SentImage[]): { above: SentImage[]; pieces: Piece[] } {
+/** A sent message's words split at the marks of its images (ADR 0220). Every image is also shown above the words. */
+export function placeImages(text: string, images: readonly SentImage[]): Piece[] {
   const marks = marksIn(text, (n) => n <= images.length);
-  if (!marks.length) return { above: [...images], pieces: text ? [text] : [] };
   const pieces: Piece[] = [];
   let from = 0;
   for (const m of marks) {
@@ -69,8 +68,23 @@ export function placeImages(text: string, images: readonly SentImage[]): { above
     from = m.end;
   }
   if (from < text.length) pieces.push(text.slice(from));
-  const placed = new Set(marks.map((m) => m.n - 1));
-  return { above: images.filter((_, i) => !placed.has(i)), pieces };
+  return pieces;
+}
+
+/**
+ * `text` without the marks of the images numbered `numbers`, each with a space beside it, so the words round it stay
+ * apart without a double space. Used when the owner removes a marked image.
+ */
+export function withoutMarks(text: string, numbers: ReadonlySet<number>): string {
+  let out = "";
+  let from = 0;
+  for (const m of text.matchAll(MARK)) {
+    if (!numbers.has(Number(m[1]))) continue;
+    out += text.slice(from, m.index);
+    from = m.index + m[0].length;
+    if (/(^|\s)$/.test(out) && text[from] === " ") from++;
+  }
+  return out + text.slice(from);
 }
 
 /** The highest image number a mark in `text` gives, or 0. */

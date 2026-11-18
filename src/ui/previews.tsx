@@ -6,7 +6,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { CloudOff, Image as ImageIcon, ImageOff, Paperclip, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { staleText, type AnnotationLabel } from "../hermes/annotations";
-import type { Attachment, SentImage } from "../hermes/model";
+import type { Attachment, SentImage, SentImagePath } from "../hermes/model";
 import { sentImageName, type SentImageLoad, type SentImageStore } from "../hermes/sentImages";
 import { useOpenPreview, usePathsIn } from "./previewContext";
 import { asError } from "../hermes/tauriPipe";
@@ -76,18 +76,42 @@ export class Previews {
   }
 }
 
-/** A staged attachment: its thumbnail if it is an image that could be read, else a paperclip. */
-/** `annotation`: where an annotation's image came from, and whether the Preview's page has moved since (ADR 0094). */
+/**
+ * A staged attachment. An image whose preview is read, or still being read, is a square thumbnail with Remove over its
+ * corner (ADR 0220). A file, or an image that couldn't be read or shown, is a small chip with a paperclip.
+ * `annotation`: where an annotation's image came from, and whether the Preview's page has moved since (ADR 0094).
+ */
 export function AttachmentChip({ file, preview, annotation, onRemove }: { file: Attachment; preview?: Preview; annotation?: AnnotationLabel; onRemove: () => void }) {
   // The bytes looked like an image but the webview couldn't draw them.
   const [broken, setBroken] = useState(false);
   const url = preview && "url" in preview && !broken ? preview.url : undefined;
   const why = broken ? "the image couldn't be shown" : preview && "error" in preview ? preview.error : undefined;
   const from = annotation && staleText(annotation);
+  const stale = annotation?.stale ? " chip-stale" : "";
+  const remove = (
+    <button type="button" title="Remove" aria-label={`Remove ${file.name}`} onClick={onRemove}>
+      <X size={12} />
+    </button>
+  );
+  if (file.kind === "image" && !why) {
+    const title = [`${file.name}, ${formatBytes(file.size)}`, file.path, from].filter(Boolean).join("\n");
+    return (
+      <span className={`chip chip-card${stale}`} title={title}>
+        {url ? <img className="chip-card-img" src={url} alt="" onError={() => setBroken(true)} /> : <span className="chip-card-img chip-card-blank" />}
+        <span className="chip-name sr-only">{file.name}</span>
+        {annotation?.stale && (
+          <span className="chip-note chip-card-note" aria-label={from}>
+            page changed
+          </span>
+        )}
+        {remove}
+      </span>
+    );
+  }
   const title = [file.path, from, why && `No preview: ${why}`].filter(Boolean).join("\n");
   return (
-    <span className={annotation?.stale ? "chip chip-stale" : "chip"} title={title}>
-      {url ? <img className="chip-thumb" src={url} alt="" onError={() => setBroken(true)} /> : <Paperclip size={12} />}
+    <span className={`chip${stale}`} title={title}>
+      <Paperclip size={12} />
       <span className="chip-name">{file.name}</span>
       <span className="chip-size">{formatBytes(file.size)}</span>
       {annotation?.stale && (
@@ -95,9 +119,7 @@ export function AttachmentChip({ file, preview, annotation, onRemove }: { file: 
           page changed
         </span>
       )}
-      <button title="Remove" onClick={onRemove}>
-        <X size={12} />
-      </button>
+      {remove}
     </span>
   );
 }
@@ -122,41 +144,52 @@ export function SentImages({ images, offline }: { images: readonly SentImage[]; 
 }
 
 /**
- * An image a mark places in a message's words (inlineImages.ts): read and opened as one above the words is, beside the
- * name the mark gives it.
+ * An image a mark places in a message's words (ADR 0220): a pill with a tiny thumbnail once its image is read, else an
+ * image icon, and the name the mark gives it. It opens the image in the Preview as the picture above the words does.
+ * Hermes keeps no size, so none is shown.
  */
 export function InlineSentImage({ image, name, offline }: { image: SentImage; name: string; offline: boolean }) {
+  const open = useOpenPreview();
+  const { load } = useSentImage(image.path, offline);
+  const [broken, setBroken] = useState(false);
+  const src = load.state === "shown" && !broken ? load.src : undefined;
   return (
-    <span className="inline-image">
-      <SentPicture image={image} offline={offline} />
-      <span className="chip-name">{name}</span>
-    </span>
+    <button type="button" className="inline-image" title={`${name}\nOpens in the preview`} disabled={!open} onClick={() => open?.({ kind: "server", path: image.path, host: true })}>
+      {src ? <img src={src} alt="" onError={() => setBroken(true)} /> : <ImageIcon size={12} aria-hidden />}
+      <span className="inline-image-name">{name}</span>
+    </button>
   );
 }
 
 const NO_STORE: SentImageLoad = { state: "failed", why: "Images from Hermes can't be read here." };
 
-function SentPicture({ image, offline }: { image: SentImage; offline: boolean }) {
+/** A sent image read through the store, read again when `asked` or `attempt` changes. Nothing is read while offline. */
+function useSentImage(path: SentImagePath, offline: boolean, asked = false, attempt = 0) {
   const store = useContext(SentImageReader);
-  const open = useOpenPreview();
   // The chat the message is in: an image is read by itself only if this app sent it in that chat.
   const chat = usePathsIn()?.session;
-  const [asked, setAsked] = useState(false);
-  const [load, setLoad] = useState<SentImageLoad>(() => store?.look(image.path, chat) ?? NO_STORE);
-  const [attempt, setAttempt] = useState(0);
+  const [load, setLoad] = useState<SentImageLoad>(() => store?.look(path, chat) ?? NO_STORE);
   useEffect(() => {
     if (!store) return setLoad(NO_STORE);
-    const now = store.look(image.path, chat, asked);
+    const now = store.look(path, chat, asked);
     setLoad(now);
     if (now.state !== "loading" || offline) return;
     let live = true;
-    void store.load(image.path, chat, asked).then((l) => {
+    void store.load(path, chat, asked).then((l) => {
       if (live) setLoad(l);
     });
     return () => {
       live = false;
     };
-  }, [store, image.path, chat, offline, attempt, asked]);
+  }, [store, path, chat, offline, attempt, asked]);
+  return { store, chat, load, setLoad };
+}
+
+function SentPicture({ image, offline }: { image: SentImage; offline: boolean }) {
+  const open = useOpenPreview();
+  const [asked, setAsked] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const { store, chat, load, setLoad } = useSentImage(image.path, offline, asked, attempt);
   const name = sentImageName(image);
   if (load.state === "loading" && !offline) return <div className="sent-image-loading" role="img" aria-busy="true" aria-label={`Loading ${name}`} title={name} />;
   if (load.state === "ask")

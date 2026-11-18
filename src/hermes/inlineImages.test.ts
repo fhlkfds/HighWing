@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { peelImages } from "./branch";
 import { localChatCache } from "./chatCache";
 import { FakeHermes, row } from "./fakeHermes";
-import { carried, markText, placeImages, sentText, withMarks } from "./inlineImages";
+import { carried, markText, placeImages, sentText, withMarks, withoutMarks } from "./inlineImages";
 import type { Attachment } from "./model";
 import { sentImage } from "./sentImages";
 import { connect } from "./transport";
@@ -24,7 +24,7 @@ describe("withMarks", () => {
 describe("markText", () => {
   it("keeps a name with brackets or line breaks from ending the mark or the line", () => {
     expect(markText(2, "a]b[c\nd.png")).toBe("[image 2: a_b_c_d.png]");
-    expect(placeImages(markText(1000, "late.png"), []).pieces).toEqual(["[image 1000: late.png]"]);
+    expect(placeImages(markText(1000, "late.png"), [])).toEqual(["[image 1000: late.png]"]);
     expect(sentText(markText(1000, "late.png"), [image("/s/k.png", "late.png")], new Map([["/s/k.png", 1000]]))).toBe("[image 1: late.png]");
   });
 });
@@ -46,28 +46,36 @@ describe("sentText", () => {
 describe("placeImages", () => {
   const images = [shot("/h/images/u1.png"), shot("/h/images/u2.png"), shot("/h/images/u3.png")];
 
-  it("places each marked image where its mark is and keeps the rest above the words", () => {
-    expect(placeImages("before [image 3: c.png] after", images)).toEqual({
-      above: [images[0], images[1]],
-      pieces: ["before ", { image: images[2], name: "c.png" }, " after"],
-    });
+  it("splits the words at each mark and names the image it places", () => {
+    expect(placeImages("before [image 3: c.png] after", images)).toEqual(["before ", { image: images[2], name: "c.png" }, " after"]);
   });
 
-  it("shows every image above words without marks, as before", () => {
-    expect(placeImages("just words", images)).toEqual({ above: images, pieces: ["just words"] });
+  it("gives words without marks as they are", () => {
+    expect(placeImages("just words", images)).toEqual(["just words"]);
+    expect(placeImages("", images)).toEqual([]);
   });
 
   it("leaves as words a mark for an image the message doesn't have, or a second mark for one it placed", () => {
-    expect(placeImages("[image 9: x.png] [image 2: b.png][image 2: b.png]", images)).toEqual({
-      above: [images[0], images[2]],
-      pieces: ["[image 9: x.png] ", { image: images[1], name: "b.png" }, "[image 2: b.png]"],
-    });
+    expect(placeImages("[image 9: x.png] [image 2: b.png][image 2: b.png]", images)).toEqual(["[image 9: x.png] ", { image: images[1], name: "b.png" }, "[image 2: b.png]"]);
   });
 
   it("reads a stored message's marks against its @image lines, in the order Hermes stored them", () => {
     const stored = "two shots: [image 2: second.png] here\n@image:/h/images/u1.png\n@image:/h/images/u2.png";
     const { rest, images: back } = peelImages(stored);
-    expect(placeImages(rest, back)).toEqual({ above: [shot("/h/images/u1.png")], pieces: ["two shots: ", { image: shot("/h/images/u2.png"), name: "second.png" }, " here"] });
+    expect(placeImages(rest, back)).toEqual(["two shots: ", { image: shot("/h/images/u2.png"), name: "second.png" }, " here"]);
+  });
+});
+
+describe("withoutMarks", () => {
+  it("takes out the marks of the numbered images and one space beside each, leaving other marks and words", () => {
+    expect(withoutMarks("see [image 2: a.png] and [image 3: b.png] now", new Set([2]))).toBe("see and [image 3: b.png] now");
+    expect(withoutMarks("[image 2: a.png] [image 2: a.png] end", new Set([2]))).toBe("end");
+    expect(withoutMarks("end [image 2: a.png]", new Set([2]))).toBe("end ");
+    expect(withoutMarks("a\n[image 2: a.png]\nb", new Set([2]))).toBe("a\n\nb");
+  });
+
+  it("returns the words as they are when no mark is named", () => {
+    expect(withoutMarks("see [image 3: b.png]", new Set([2]))).toBe("see [image 3: b.png]");
   });
 });
 
@@ -105,7 +113,8 @@ describe("A message's marks on the way to Hermes and back", () => {
   const placedIn = (hermes: Awaited<ReturnType<typeof connect>>) => {
     const sent = hermes.getSnapshot().chats.find((c) => c.id === "c1")!.items.find((i) => i.kind === "user")!;
     if (sent.kind !== "user") throw new Error("no message");
-    return placeImages(sent.text, sent.images ?? []);
+    const images = sent.images ?? [];
+    return { images, pieces: placeImages(sent.text, images) };
   };
 
   it("keeps each image where its mark is through a failed send, Retry, the Saved copy and the history Hermes stored", async () => {
@@ -132,8 +141,9 @@ describe("A message's marks on the way to Hermes and back", () => {
     expect(uploads.slice(-2)).toEqual([btoa("\x89PNG top"), btoa("\x89PNG marked")]);
     const sent = placedIn(hermes);
     expect(sent.pieces).toEqual(["before ", { image: expect.objectContaining({ path: expect.stringMatching(/\/images\//) }), name: "image.png" }, "\nafter"]);
-    expect(sent.above).toHaveLength(1);
-    const [topPath, markedPath] = [sent.above[0].path, (sent.pieces[1] as { image: { path: string } }).image.path];
+    expect(sent.images).toHaveLength(2);
+    const [topPath, markedPath] = sent.images.map((i) => i.path);
+    expect((sent.pieces[1] as { image: { path: string } }).image.path).toBe(markedPath);
     expect(server.serverFiles[markedPath]).toBe("\x89PNG marked");
     expect(server.serverFiles[topPath]).toBe("\x89PNG top");
     await hermes.close();
@@ -144,7 +154,7 @@ describe("A message's marks on the way to Hermes and back", () => {
       await relaunched.open("c1");
       await relaunched.idle();
       const back = placedIn(relaunched);
-      expect(back.above.map((i) => i.path)).toEqual([topPath]);
+      expect(back.images.map((i) => i.path)).toEqual([topPath, markedPath]);
       expect(back.pieces).toEqual(["before ", { image: expect.objectContaining({ path: markedPath }), name: "image.png" }, "\nafter"]);
       await relaunched.close();
     }
