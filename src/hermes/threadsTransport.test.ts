@@ -6,7 +6,7 @@ import { BOT_CHAT_TITLE, type Bot } from "./bots";
 import { FakeHermes, row } from "./fakeHermes";
 import { chatKind } from "./chatKind";
 import { THREAD_WINDOW, threadTitle } from "./threads";
-import { connect, type Hermes } from "./transport";
+import { BranchUnconfirmed, connect, type Hermes } from "./transport";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -336,5 +336,121 @@ describe("compaction", () => {
     expect(await hermes.openThread(bot("default"), title)).toBe(tip);
     expect(await hermes.deleteThread({ profile: "default", title })).toBe(true);
     expect(server.sessions.map((s) => s.id).sort()).toEqual(["bot", "side"]);
+  });
+});
+
+describe("Thread from here", () => {
+  /** The default bot's Bot Chat open, and the id of its reply. */
+  async function inBotChat(setup?: (server: FakeHermes) => void) {
+    const env = await signedIn((s) => {
+      // Stored with row ids, as Hermes stores them: a message is found in the chat's history by its row.
+      s.transcripts.bot = [];
+      s.storeMessage("bot", { role: "user", text: "Plan the VLANs" });
+      s.storeMessage("bot", { role: "assistant", text: "Three VLANs: lab, home, guests." });
+      setup?.(s);
+    });
+    const botChat = await env.hermes.openBotChat(env.bot("default"));
+    await env.hermes.open(botChat);
+    const chat = () => env.hermes.getSnapshot().chats.find((c) => c.id === botChat)!;
+    const reply = () => chat().items.find((i) => i.kind === "assistant")!.id;
+    const forks = () => env.server.sessions.filter((s) => s.parent_session_id === botChat);
+    return { ...env, botChat, chat, reply, forks };
+  }
+
+  it("has Hermes copy the Bot Chat up to the message into a hidden session named for the topic, under the bot", async () => {
+    const { server, hermes, botChat, chat, reply, forks, topics } = await inBotChat();
+    const preview = await hermes.previewBranch(botChat, reply());
+    const { chatId, warnings } = await hermes.threadFromHere(preview, " VLAN  plan ");
+    expect(warnings).toEqual([]);
+    expect(rpc(server, "session.branch").map((r) => r.params)).toEqual([{ session_id: chat().runtimeId, count: 2, name: "Bot Thread: VLAN plan", idempotency_key: expect.stringMatching(/^branch-/) }]);
+    expect(forks()).toMatchObject([{ id: chatId, title: "Bot Thread: VLAN plan", hidden: true, pinned: false }]);
+    expect(server.transcripts[chatId].map((m) => m.text)).toEqual(["Plan the VLANs", "Three VLANs: lab, home, guests."]);
+
+    const thread = hermes.getSnapshot().chats.find((c) => c.id === chatId)!;
+    expect(chatKind(thread)).toBe("thread");
+    expect(thread.items.map((i) => (i.kind === "user" || i.kind === "assistant" ? i.text : i.kind))).toEqual(["Plan the VLANs", "Three VLANs: lab, home, guests."]);
+    expect(hermes.getSnapshot().branches).toEqual({ links: {}, attempts: [] });
+    await hermes.idle();
+    await hermes.sync();
+    await hermes.idle();
+    expect(topics("default")).toEqual(["VLAN plan"]);
+    expect(forks()[0].pinned).toBe(false);
+    expect(server.transcripts[botChat]).toHaveLength(2);
+    const edits = server.restRequests.filter((r) => r.method === "PATCH").map((r) => r.body!);
+    expect(edits.filter((b) => "hidden" in b || "pinned" in b || "title" in b)).toMatchObject([{ hidden: true }]);
+  });
+
+  it("takes the next free title when the topic's is taken, chosen before Hermes is asked", async () => {
+    const { server, hermes, botChat, reply, forks } = await inBotChat((s) => s.seedThread("default", "VLAN plan"));
+    const { chatId } = await hermes.threadFromHere(await hermes.previewBranch(botChat, reply()), "VLAN plan");
+    expect(forks()).toMatchObject([{ id: chatId, title: "Bot Thread: VLAN plan (2)" }]);
+    expect(rpc(server, "session.branch")).toHaveLength(1);
+  });
+
+  it("adopts the thread Hermes made when its answer was lost, by its title, though no chat list shows it", async () => {
+    const { server, hermes, botChat, reply, forks, topics } = await inBotChat();
+    const preview = await hermes.previewBranch(botChat, reply());
+    server.dropOnBranch = "stored";
+    await expect(hermes.threadFromHere(preview, "VLAN plan")).rejects.toBeInstanceOf(BranchUnconfirmed);
+    expect(hermes.getSnapshot().branches.attempts).toMatchObject([{ thread: "Bot Thread: VLAN plan" }]);
+    // The hide never went: the branch is still a visible session.
+    expect(forks()).toMatchObject([{ title: "Bot Thread: VLAN plan" }]);
+    expect(forks()[0].hidden).toBeUndefined();
+
+    await hermes.reconnect();
+    await hermes.idle();
+    const id = forks()[0].id;
+    expect(hermes.getSnapshot().branches).toEqual({ links: {}, attempts: [] });
+    expect(hermes.getSnapshot().branchNews).toMatchObject({ chatId: id, text: "Hermes made the thread “VLAN plan” before the connection dropped. It's under its bot." });
+    expect(chatKind(hermes.getSnapshot().chats.find((c) => c.id === id)!)).toBe("thread");
+    expect(forks()).toMatchObject([{ hidden: true, pinned: false }]);
+    expect(topics("default")).toEqual(["VLAN plan"]);
+    expect(rpc(server, "session.branch")).toHaveLength(1);
+  });
+
+  it("asks again under the same title and key after a lost answer, and gets the one thread", async () => {
+    const { server, hermes, botChat, reply, forks } = await inBotChat();
+    server.dropOnBranch = "lost";
+    await expect(hermes.threadFromHere(await hermes.previewBranch(botChat, reply()), "VLAN plan")).rejects.toBeInstanceOf(BranchUnconfirmed);
+    await hermes.reconnect();
+    await hermes.open(botChat);
+    await hermes.idle();
+    const { chatId } = await hermes.threadFromHere(await hermes.previewBranch(botChat, reply()), "VLAN plan");
+    const asked = rpc(server, "session.branch").map((r) => r.params);
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toMatchObject({ name: "Bot Thread: VLAN plan", idempotency_key: asked[0].idempotency_key });
+    expect(forks().map((s) => s.id)).toEqual([chatId]);
+  });
+
+  it("deletes a thread that holds other rows than the preview showed", async () => {
+    const { server, hermes, botChat, reply, forks, topics } = await inBotChat();
+    const preview = await hermes.previewBranch(botChat, reply());
+    server.beforeBranch = () => server.transcripts[botChat].unshift({ role: "user", text: "Slipped in by another client", row_id: 0 });
+    await expect(hermes.threadFromHere(preview, "VLAN plan")).rejects.toThrow("so Highwing deleted that thread again");
+    expect(forks()).toEqual([]);
+    await hermes.idle();
+    expect(topics("default")).toEqual([]);
+  });
+
+  it("says so when another session takes the title between the lookup and the branch, and makes nothing", async () => {
+    const { server, hermes, botChat, reply, forks } = await inBotChat();
+    const preview = await hermes.previewBranch(botChat, reply());
+    server.beforeBranch = () => void server.seedThread("default", "VLAN plan", { messages: [{ role: "user", text: "From the other computer" }] });
+    const branch = server.handlers["session.branch"];
+    server.handlers["session.branch"] = (r) => {
+      server.beforeBranch?.();
+      server.beforeBranch = undefined;
+      branch(r);
+    };
+    await expect(hermes.threadFromHere(preview, "VLAN plan")).rejects.toThrow("Another session took the name of the thread “VLAN plan” first. Nothing was made; try again.");
+    expect(forks()).toEqual([]);
+    expect(hermes.getSnapshot().branches.attempts).toEqual([]);
+  });
+
+  it("refuses a topic with nothing in it before asking Hermes for anything", async () => {
+    const { server, hermes, botChat, reply } = await inBotChat();
+    const preview = await hermes.previewBranch(botChat, reply());
+    await expect(hermes.threadFromHere(preview, "  ")).rejects.toThrow("A thread needs a topic.");
+    expect(rpc(server, "session.branch")).toEqual([]);
   });
 });

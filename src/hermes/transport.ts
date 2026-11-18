@@ -56,7 +56,7 @@ import { parseCheckpointList, type RelPath } from "./fileChanges";
 import type { Restored, RollbackIO } from "./fileUndo";
 import type { AppMethod } from "./canonicalVerbs";
 import { policyOf } from "./chatKind";
-import { THREAD_PREFIX, Threads, isThreadTitle, threadTitle, threadTopic, titleInUse, type BotThread, type ThreadShelf, type ThreadTitle } from "./threads";
+import { THREAD_PREFIX, Threads, freeTitle, isThreadTitle, threadTitle, threadTopic, titleInUse, type BotThread, type ThreadShelf, type ThreadTitle } from "./threads";
 import { projectStored, type TranscriptMessage } from "./storedTranscript";
 import {
   BOT_BLOCK_FIELDS,
@@ -138,6 +138,8 @@ export const APP_SOURCE = "gui";
 const BOT_CHAT_RENAME = "A Bot Chat's name is how Hermes finds it, so it can't be renamed.";
 const THREAD_RETITLE = "A thread is named for its topic, so Hermes doesn't write a title for it. Rename it instead.";
 /** Hermes runs only the job in a Job run's session, and stores a refusal in the run's history if it is sent a message. */
+/** How many titles Thread from here tries for one topic before it gives up. */
+const FREE_TITLE_ROUNDS = 5;
 /** How many bots' threads are read at once. */
 const SHELF_READS_AT_ONCE = 3;
 /** How many times one read of a bot's threads lists them again because a thread changed here meanwhile. */
@@ -3046,8 +3048,31 @@ export class Hermes {
     return this.branchNow(preview, title, variant, whole);
   }
 
-  /** `branch` once the owner started it: it finishes even if the connection goes to the background meanwhile. */
-  private async branchNow(preview: BranchPreview, title?: string, variant?: BranchVariant, whole?: string): Promise<{ chatId: string; warnings: string[] }> {
+  /**
+   * Thread from here (ADR 0205): makes the branch `preview` describes as a thread of the chat's bot on `topic`. It is
+   * `branch` with three differences: Hermes names the branch for the topic as it makes it, the app hides it at once,
+   * and it is kept under its bot instead of in the chat list, with no link back. A lost answer is settled by looking
+   * the title up, since no chat list shows a hidden session.
+   */
+  async threadFromHere(preview: BranchPreview, topic: string): Promise<{ chatId: string; warnings: string[] }> {
+    this.foreground();
+    return this.branchNow(preview, undefined, undefined, undefined, topic);
+  }
+
+  /** The first of the topic's title, `(2)`, `(3)`… that no session of the profile holds, by exact lookup. */
+  private async freeThreadTitle(profile: string, topic: string): Promise<ThreadTitle> {
+    const base = threadTitle(topic);
+    const taken: string[] = [];
+    for (let round = 0; round < FREE_TITLE_ROUNDS; round++) {
+      const title = freeTitle(base, taken);
+      if (!(await this.threads.find(profile, title))) return title;
+      taken.push(title);
+    }
+    throw new Error(`Hermes already has several threads on “${threadTopic(base)}”. Pick another topic.`);
+  }
+
+  /** `branch` once the owner started it: it finishes even if the connection goes to the background meanwhile. `threadOn`: the topic, for `threadFromHere`. */
+  private async branchNow(preview: BranchPreview, title?: string, variant?: BranchVariant, whole?: string, threadOn?: string): Promise<{ chatId: string; warnings: string[] }> {
     const profile = this.profile;
     const { chat, spine, index } = await this.branchBoundary(preview.chatId, preview.itemId, profile);
     const count = index + 1;
@@ -3060,16 +3085,31 @@ export class Hermes {
     // An earlier branch from this same point whose answer was lost: if Hermes made it, it's the one. Lost attempts
     // from other messages of the chat are left as they are.
     // An Edit or Regenerate is told apart from a plain branch from the same message, and from another edit of it.
+    // A thread is told apart from a branch from the same message too.
     const earlier = this.snapshot.branches.attempts.find(
-      (a) => a.parentId === chat.id && a.count === count && a.fingerprint === preview.fingerprint && a.variant?.kind === variant?.kind && a.variant?.pending?.text === variant?.pending?.text,
+      (a) =>
+        a.parentId === chat.id &&
+        a.count === count &&
+        a.fingerprint === preview.fingerprint &&
+        a.variant?.kind === variant?.kind &&
+        a.variant?.pending?.text === variant?.pending?.text &&
+        (a.thread === undefined) === (threadOn === undefined),
     );
     if (earlier) {
       const { found } = await this.findBranch(earlier, profile);
-      if (found) return { chatId: await this.adoptListed(found, earlier, profile), warnings: ["Hermes had made the branch asked for before the connection dropped, so that one is open now."] };
+      if (found)
+        return {
+          chatId: await this.adoptListed(found, earlier, profile),
+          warnings: [`Hermes had made the ${earlier.thread ? "thread" : "branch"} asked for before the connection dropped, so that one is open now.`],
+        };
     }
+    // Chosen before Hermes is asked: a name another session holds fails the branch, after Hermes may have stored a row.
+    // A lost attempt goes again under the title it went with, which Hermes answers with the branch it made, if it did.
+    const thread = threadOn === undefined ? undefined : (earlier?.thread ?? (await this.freeThreadTitle(profile, threadOn)));
     const sid = await this.resume(chat.id);
     const generation = this.generation;
-    const before = earlier ? earlier.before : (await this.listedSince(profile)).rows.filter((r) => r.parent_session_id === chat.id).map((r) => r.id);
+    // No chat list shows a hidden session, so a thread attempt is found by its title, not among the parent's branches.
+    const before = earlier ? earlier.before : thread ? [] : (await this.listedSince(profile)).rows.filter((r) => r.parent_session_id === chat.id).map((r) => r.id);
     const attempt: BranchAttempt = {
       // The same key as the lost attempt from this point: Hermes answers it with the branch it made, if it did.
       key: earlier ? earlier.key : `branch-${newKey()}`,
@@ -3083,6 +3123,7 @@ export class Hermes {
       ...(title?.trim() && { title: title.trim() }),
       ...(chat.model && { model: chat.model }),
       ...(variant && { variant }),
+      ...(thread && { thread }),
     };
     // Checked again just as the call goes: a reply may have started, or the connection or profile changed, while the
     // list was read. A runtime id means nothing on another connection.
@@ -3100,7 +3141,7 @@ export class Hermes {
     this.updateBranches(profile, (b) => ({ ...b, attempts: [...b.attempts.filter((a) => a.key !== attempt.key), attempt] }));
     let res: BranchAnswer;
     try {
-      res = (await this.request("session.branch", { session_id: sid, count, idempotency_key: attempt.key })) as BranchAnswer;
+      res = (await this.request("session.branch", { session_id: sid, count, ...(thread && { name: thread }), idempotency_key: attempt.key })) as BranchAnswer;
     } catch (e) {
       if (e instanceof ConnectionLostError) throw new BranchUnconfirmed();
       // Refused before Hermes stored anything: no such method, or nothing to branch.
@@ -3111,17 +3152,21 @@ export class Hermes {
       }
       // Other failures can come after Hermes stored the branch, as `agent init failed on branch` does.
       const why = (e as Error).message;
-      let result: { found?: SessionRow; sure: boolean } = { sure: false };
+      let result: Awaited<ReturnType<typeof this.findBranch>> = { sure: false };
       if (this.profile === profile) result = await this.findBranch(attempt, profile).catch(() => ({ sure: false }));
       if (result.found) return { chatId: await this.adoptListed(result.found, attempt, profile), warnings: [`Hermes made the branch but said: ${why}`] };
       if (result.sure) {
         this.dropAttempt(profile, attempt.key);
+        if (thread && titleInUse(e)) throw new Error(`Another session took the name of the thread “${threadTopic(thread)}” first. Nothing was made; try again.`);
         throw e;
       }
       // Kept, so the chat list settles it later, and branching from here again asks with the same key.
       throw new Error(`Hermes said: ${why}. Highwing couldn't tell whether it made the branch anyway; it checks the chat list again, and branching from here again won't make a second one.`);
     }
     const generation2 = this.generation;
+    // Hidden before anything else, so other clients' chat lists show it for one round trip at most. One left visible
+    // is still kept out of the list here by its title, and hidden when a chat list next reports it (`hideStray`).
+    const unhidden = thread ? await this.patchSession(res.stored_session_id, profile, { hidden: true }).then(() => undefined, errorText) : undefined;
     // Read back as stored, the same way the parent was read: the branch must hold exactly the rows the preview showed.
     let check: SpineRow[] | Error;
     try {
@@ -3131,6 +3176,10 @@ export class Hermes {
     }
     if (this.profile !== profile) {
       // Kept with its profile; listed as made here once the owner is back.
+      if (thread) {
+        this.dropAttempt(profile, attempt.key);
+        throw new Error("The profile changed before Hermes answered. The thread is under that profile's bot.");
+      }
       if (!(check instanceof Error) && check.length === count && spineKey(check) === attempt.fingerprint) this.keepElsewhere(res.stored_session_id, attempt, profile);
       throw new Error("The profile changed before Hermes answered. The branch is in that profile's list.");
     }
@@ -3142,10 +3191,12 @@ export class Hermes {
         () => true,
         () => false,
       );
+      const what = thread ? "thread" : "branch";
+      if (thread) this.threadEdited(profile);
       throw new Error(
         gone
-          ? "Hermes copied a different part of this chat than the preview showed, so Highwing deleted that branch again. Nothing else changed."
-          : `Hermes copied a different part of this chat than the preview showed, and the branch it made, "${res.title}", couldn't be deleted. Delete it from the list.`,
+          ? `Hermes copied a different part of this chat than the preview showed, so Highwing deleted that ${what} again. Nothing else changed.`
+          : `Hermes copied a different part of this chat than the preview showed, and the ${what} it made, "${res.title}", couldn't be deleted. Delete it from ${thread ? "under its bot" : "the list"}.`,
       );
     }
     // The connection changed while the branch was read back: its runtime id means nothing now, so it opens afresh.
@@ -3153,7 +3204,8 @@ export class Hermes {
       this.generation !== generation2 || this.snapshot.status !== "connected"
         ? { chatId: await this.adoptListed({ id: res.stored_session_id, title: res.title }, attempt, profile), warnings: [] as string[] }
         : await this.adopt(res, attempt, profile);
-    if (check instanceof Error) made.warnings.unshift(`Highwing couldn't read the branch back to check what it holds (${check.message}).`);
+    if (check instanceof Error) made.warnings.unshift(`Highwing couldn't read the ${thread ? "thread" : "branch"} back to check what it holds (${check.message}).`);
+    if (unhidden !== undefined) made.warnings.push(`Other Hermes clients list it among their chats for now: hiding it failed (${unhidden}). Highwing hides it when it next reads the chat list.`);
     return made;
   }
 
@@ -3421,7 +3473,14 @@ export class Hermes {
    * rows are the ones the preview showed. Another client's branch of the same chat from elsewhere doesn't match. `sure`:
    * the list was read far enough back, and no more than one matched, so none found means none was made.
    */
-  private async findBranch(a: BranchAttempt, profile: string): Promise<{ found?: SessionRow; sure: boolean }> {
+  private async findBranch(a: BranchAttempt, profile: string): Promise<{ found?: Pick<SessionRow, "id" | "title">; sure: boolean }> {
+    if (a.thread) {
+      // A thread's title is its own in the profile, and the lookup sees hidden sessions and has no window.
+      const thread = await this.threads.find(profile, a.thread);
+      if (!thread || this.deleted.has(profile, thread.openId)) return { sure: true };
+      const spine = spineOf(await this.storedRows(thread.openId, profile));
+      return spine.length === a.count && spineKey(spine) === a.fingerprint ? { found: { id: thread.openId, title: a.thread }, sure: true } : { sure: true };
+    }
     const links = this.profile === profile ? this.snapshot.branches.links : this.cache.loadBranches(profile).links;
     const { rows, complete } = await this.listedSince(profile, a.startedAt);
     const fresh = [...new Map(rows.map((r) => [r.id, r])).values()].filter(
@@ -3448,7 +3507,8 @@ export class Hermes {
    */
   private async checkBranchAttempts(profile: string) {
     for (const a of this.snapshot.branches.attempts) {
-      let result: { found?: SessionRow; sure: boolean };
+      const what = a.thread ? `the thread “${threadTopic(a.thread)}”` : `the branch of "${a.parentTitle}"`;
+      let result: Awaited<ReturnType<typeof this.findBranch>>;
       try {
         result = await this.findBranch(a, profile);
       } catch {
@@ -3457,14 +3517,14 @@ export class Hermes {
       if (this.profile !== profile) return;
       if (result.found) {
         const chatId = await this.adoptListed(result.found, a, profile);
-        this.update({ branchNews: { text: `Hermes made the branch of "${a.parentTitle}" before the connection dropped. It's in the list.`, chatId, at: Date.now() } });
+        this.update({ branchNews: { text: `Hermes made ${what} before the connection dropped. It's ${a.thread ? "under its bot" : "in the list"}.`, chatId, at: Date.now() } });
       } else if (Date.now() - a.startedAt > BRANCH_KEY_TTL_MS) {
         this.dropAttempt(profile, a.key);
         this.update({
           branchNews: {
             text: result.sure
-              ? `Hermes didn't make the branch of "${a.parentTitle}". Nothing changed; branch again to try.`
-              : `Highwing couldn't tell whether Hermes made the branch of "${a.parentTitle}". Look for it in the list before branching again.`,
+              ? `Hermes didn't make ${what}. Nothing changed; ${a.thread ? "start it" : "branch"} again to try.`
+              : `Highwing couldn't tell whether Hermes made ${what}. Look for it ${a.thread ? "under its bot before starting it" : "in the list before branching"} again.`,
             at: Date.now(),
           },
         });
@@ -3492,7 +3552,7 @@ export class Hermes {
   }
 
   /** Keeps a branch found in the chat list, made by an attempt whose answer was lost. */
-  private async adoptListed(row: Pick<SessionRow, "id" | "title" | "preview">, a: BranchAttempt, profile: string): Promise<string> {
+  private async adoptListed(row: Pick<SessionRow, "id" | "title">, a: BranchAttempt, profile: string): Promise<string> {
     const chat: Chat = { id: row.id, title: listTitle(row), source: "app", settled: false, updatedAt: Date.now(), items: [] };
     await this.keepBranch(chat, a, profile);
     return chat.id;
@@ -3500,6 +3560,7 @@ export class Hermes {
 
   /** Lists a branch as made here and Active, then gives it the attempt's model and title. Resolves to what failed. */
   private async keepBranch(chat: Chat, a: BranchAttempt, profile: string): Promise<string[]> {
+    if (a.thread) return this.keepThread({ ...chat, title: a.thread, settled: true }, a, profile);
     const link: BranchLink = { parentId: a.parentId, parentTitle: a.parentTitle, point: a.point, at: Date.now(), ...(a.variant && { variant: a.variant }) };
     // The owner switched profile meanwhile: the branch is kept as made here, Active, and listed when they're back.
     if (this.profile !== profile) {
@@ -3514,10 +3575,7 @@ export class Hermes {
     // Both are fenced edits of the same session: the rename goes after the pin, or it would name a stale revision.
     const pinned = this.writePin(chat.id, profile);
     this.track(pinned);
-    const warnings: string[] = [];
-    // Hermes starts a branch on the profile's model, not the parent's.
-    if (a.model && (a.model.model !== chat.model?.model || a.model.provider !== chat.model?.provider || (a.model.effort && a.model.effort !== chat.model?.effort) || (a.model.fast !== undefined && a.model.fast !== chat.model?.fast)))
-      await this.setModel(chat.id, a.model).catch((e) => warnings.push(`It runs on the profile's model: Hermes didn't switch it to ${a.model!.model} (${(e as Error).message})`));
+    const warnings = await this.matchModel(chat, a);
     if (a.title && a.title !== chat.title) await pinned;
     if (a.title && a.title !== chat.title)
       await this.rename(chat.id, a.title, this.snapshot.chats.find((c) => c.id === chat.id)?.title ?? chat.title).catch((e) =>
@@ -3526,6 +3584,27 @@ export class Hermes {
     // An Edit or Regenerate shows what its answer runs on: the model Hermes reports for the branch now.
     const model = this.snapshot.chats.find((c) => c.id === chat.id)?.model;
     if (a.variant && model && this.profile === profile) this.setVariant(profile, chat.id, (v) => ({ ...v, model }));
+    return warnings;
+  }
+
+  /**
+   * Keeps a thread made by "Thread from here": beside the list under its title, on the parent's model, and under its
+   * bot. Hermes named it as it made it, so nothing is renamed, and a thread has no pin and no link back.
+   */
+  private async keepThread(chat: Chat, a: BranchAttempt, profile: string): Promise<string[]> {
+    this.dropAttempt(profile, a.key);
+    this.threadEdited(profile);
+    if (this.profile !== profile) return [];
+    this.revealed.add(chat.id);
+    this.update({ chats: [chat, ...this.snapshot.chats.filter((c) => c.id !== chat.id)] });
+    return this.matchModel(chat, a);
+  }
+
+  /** Switches a branch to the model its parent ran on: Hermes starts a branch on the profile's model. Resolves to what failed. */
+  private async matchModel(chat: Chat, a: BranchAttempt): Promise<string[]> {
+    const warnings: string[] = [];
+    if (a.model && (a.model.model !== chat.model?.model || a.model.provider !== chat.model?.provider || (a.model.effort && a.model.effort !== chat.model?.effort) || (a.model.fast !== undefined && a.model.fast !== chat.model?.fast)))
+      await this.setModel(chat.id, a.model).catch((e) => warnings.push(`It runs on the profile's model: Hermes didn't switch it to ${a.model!.model} (${(e as Error).message})`));
     return warnings;
   }
 

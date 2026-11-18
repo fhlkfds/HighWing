@@ -264,6 +264,25 @@ export const es: Catalogue = {
     openFailed: (name, why) => `No se pudo abrir ${name}: ${why}`,
     notChanged: (name, why) => `${name} no cambió. ${why}`,
   },
+  threads: {
+    from: {
+      action: "Hilo desde aquí",
+      actionTip: "Empezar un hilo con este bot desde este punto. El Bot Chat queda como está.",
+      intro: (whose, excerpt) =>
+        `Un hilo con este bot empieza con el historial del Bot Chat hasta ${whose === "user" ? "tu mensaje" : "la respuesta del bot"} «${excerpt}». El Bot Chat queda como está, y lo que envíes después va al hilo.`,
+      topic: "Tema",
+      topicHint: "De qué trata el hilo. Aparece bajo el bot con este nombre.",
+      again: "Empezar el hilo otra vez desde el mismo mensaje no creará un segundo.",
+      fileThere: "En el servidor: el hilo puede consultarlo.",
+      fileMissing: "Ya no está en el servidor: el hilo no puede leerlo.",
+      fileUnknown: "No se pudo comprobar si sigue en el servidor.",
+      anyway: (n) => `Empezarlo de todos modos: los mensajes copiados aún nombran ${n === 1 ? "este archivo" : "estos archivos"}, y Hermes no ${n === 1 ? "lo" : "los"} encontrará.`,
+      warning: "Un hilo solo copia mensajes. No deshace los archivos que Hermes cambió en el servidor ni nada más que haya hecho, y las herramientas del hilo trabajan en el mismo servidor.",
+      making: "Empezando el hilo…",
+      create: "Empezar hilo",
+      made: (warnings) => `Hilo empezado. ${warnings}`,
+    },
+  },
   chatList: {
     modes: "Lista de chats",
     chats: "Chats",

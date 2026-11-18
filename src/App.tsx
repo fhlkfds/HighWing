@@ -4144,6 +4144,7 @@ function ChatView({
 }) {
   // What the owner has typed and not sent, kept for each chat on this connection and profile. Two panes on one chat
   // share its draft.
+  const words = useLocale();
   const draftOf = (id: string | null) => draftKey(connection, profile, id);
   const shownDraft = draftOf(chatId);
   const composerText = useSyncExternalStore(savedDrafts.subscribe, () => savedDrafts.get(shownDraft));
@@ -4311,7 +4312,7 @@ function ChatView({
   const visible = usePaneVisible();
 
   // Branch from here (ADR 0027): the message the preview is open for, if any.
-  const [branchFrom, setBranchFrom] = useState<string>();
+  const [branchFrom, setBranchFrom] = useState<{ itemId: string; as: "branch" | "thread" }>();
   useEffect(() => setBranchFrom(undefined), [chatId, profile]);
   const link = useSyncExternalStore(hermes.subscribe, () => hermes.getSnapshot().branches.links[chat.id]);
   // Edit and Regenerate (ADR 0035): the message the dialog is open for, and the versions of this chat's turns.
@@ -4652,7 +4653,15 @@ function ChatView({
             }
           : undefined
       }
-      branch={started && policy.branch ? { blocked: branchBlocked(chat, status === "connected"), onBranch: setBranchFrom } : undefined}
+      branch={
+        started && policy.branch
+          ? {
+              blocked: branchBlocked(chat, status === "connected"),
+              onBranch: (itemId) => setBranchFrom({ itemId, as: "branch" }),
+              onThread: policy.threadFrom ? (itemId) => setBranchFrom({ itemId, as: "thread" }) : undefined,
+            }
+          : undefined
+      }
       onRun={started ? setRunOf : undefined}
       branchedFrom={
         link && (
@@ -4738,15 +4747,20 @@ function ChatView({
     {runOf && <RunDialog key={`${chat.id}/${runOf}`} api={{ read: () => hermes.run(chat.id, runOf) }} onClose={() => setRunOf(undefined)} />}
     {branchFrom && (
       <BranchDialog
-        key={`${chat.id}/${branchFrom}`}
-        api={{ preview: () => hermes.previewBranch(chat.id, branchFrom), make: (p, title) => hermes.branch(p, title) }}
+        key={`${chat.id}/${branchFrom.itemId}/${branchFrom.as}`}
+        as={branchFrom.as}
+        api={{
+          preview: () => hermes.previewBranch(chat.id, branchFrom.itemId),
+          make: (p, title) => (branchFrom.as === "thread" ? hermes.threadFromHere(p, title ?? "") : hermes.branch(p, title)),
+        }}
         onClose={() => setBranchFrom(undefined)}
         done={(id, warnings) => {
+          const made = branchFrom.as;
           setBranchFrom(undefined);
           if (!stillIn()) return;
           // The branch opens here; this chat, and its Draft, stay as they were.
           onOpenChat(id);
-          if (warnings.length) onToast(`Branch made. ${warnings.join(" ")}`);
+          if (warnings.length) onToast(made === "thread" ? words.threads.from.made(warnings.join(" ")) : `Branch made. ${warnings.join(" ")}`);
         }}
       />
     )}

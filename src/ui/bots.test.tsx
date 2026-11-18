@@ -1733,3 +1733,54 @@ describe("A bot's menu in the chat list panel", { timeout: 30_000 }, () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByPlaceholderText(/Message/)));
   });
 });
+
+describe("Thread from here", () => {
+  /** Scribe's Bot Chat open, its two messages stored with row ids as Hermes stores them. */
+  async function inScribesBotChat() {
+    const env = await launch((s) => {
+      s.transcripts["scribe-bot"] = [];
+      s.storeMessage("scribe-bot", { role: "user", text: "Draft the release notes for 0.9" });
+      s.storeMessage("scribe-bot", { role: "assistant", text: "## Release notes drafted\nThree fixes." });
+      s.liveSessions = [];
+    });
+    await showBots(env.user);
+    await env.user.click(botRows()[1]);
+    await waitFor(() => expect(screen.getByText("Three fixes.")).toBeTruthy());
+    await act(async () => void (await env.hermes.idle()));
+    return env;
+  }
+
+  it("is offered beside Branch from here under a Bot Chat's messages, and not in an ordinary chat", async () => {
+    const { user } = await inScribesBotChat();
+    expect(screen.getAllByRole("button", { name: "Thread from here" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Branch from here" })).toHaveLength(2);
+    await user.keyboard("{Control>}k{/Control}");
+    await user.type(screen.getByPlaceholderText("Search all chats, including Archived"), "Changelog wording");
+    await waitFor(() => expect(document.querySelector(".hit-row")).toBeTruthy());
+    await user.click(document.querySelector<HTMLElement>(".hit-row")!);
+    await waitFor(() => expect(screen.getByText("Which wording reads better?")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Thread from here" })).toBeNull();
+  });
+
+  it("previews the history, offers the message's first words as the topic, and starts a hidden thread named for it", async () => {
+    const { server, user } = await inScribesBotChat();
+    await user.click(screen.getAllByRole("button", { name: "Thread from here" })[1]);
+    const dialog = await screen.findByRole("dialog", { name: "Thread from here" });
+    await within(dialog).findByText(/History it starts with: 2 messages/);
+    expect(dialog.textContent).toContain("starts with the Bot Chat's history up to the bot's reply");
+    const topic = within(dialog).getByRole<HTMLInputElement>("textbox", { name: "Topic" });
+    expect(topic.value).toBe("Release notes drafted Three fixes.");
+    const start = within(dialog).getByRole<HTMLButtonElement>("button", { name: "Start thread" });
+    await user.clear(topic);
+    expect(start.disabled).toBe(true);
+    await user.type(topic, "Release notes");
+    await user.click(start);
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Thread from here" })).toBeNull());
+    const thread = server.otherProfiles.scribe.find((r) => r.parent_session_id === "scribe-bot")!;
+    expect(thread).toMatchObject({ title: "Bot Thread: Release notes", hidden: true, pinned: false });
+    expect(server.transcripts[thread.id].map((m) => m.text)).toEqual(["Draft the release notes for 0.9", "## Release notes drafted\nThree fixes."]);
+    expect(server.transcripts["scribe-bot"]).toHaveLength(2);
+    expect(screen.queryByText(/Branched from/)).toBeNull();
+  });
+});
