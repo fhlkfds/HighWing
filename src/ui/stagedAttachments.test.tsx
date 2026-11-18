@@ -489,14 +489,12 @@ describe("Images placed in the words (ADR 0200)", () => {
 
   it("takes a marked image's mark out of the words with it when the owner removes the image, and Undo brings the words back", async () => {
     const { hermes, rust, user } = await signedIn();
-    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
     await rust.land("\x89PNG top");
     await waitFor(() => expect(stripped()).toHaveLength(1));
     await user.type(composer(), "see here now");
     await caretAt("see".length);
-    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
     await rust.land("\x89PNG marked");
-    const mark = `[image 2: ${rust.names[1]}.png]`;
+    const mark = `[image 2: ${rust.names[1]}]`;
     await waitFor(() => expect(composer().value).toBe(`see ${mark} here now`));
     expect(stripped()).toHaveLength(2);
 
