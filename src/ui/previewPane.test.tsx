@@ -2047,6 +2047,41 @@ describe("The page's size: Responsive or a device's", () => {
     expect(view.made).toBe(1);
   });
 
+  it("rotates the size, the box's included, and rotates a device's back to that device", async () => {
+    const { view, user } = await onLinux();
+    await user.click(button("Rotate"));
+    await waitFor(() => expect(view.placed.get(1)?.page).toEqual({ width: 683, height: 480 }));
+    expect([device().selectedOptions[0].text, side("Width").value, side("Height").value]).toEqual(["Responsive", "683", "480"]);
+
+    await user.selectOptions(device(), "iPhone SE");
+    await user.click(button("Rotate"));
+    await waitFor(() => expect(view.placed.get(1)?.page).toEqual({ width: 667, height: 375 }));
+    expect([device().value, side("Width").value, side("Height").value]).toEqual(["iPhone SE", "667", "375"]);
+    await user.click(button("Rotate"));
+    await waitFor(() => expect(view.placed.get(1)?.page).toEqual({ width: 375, height: 667 }));
+    expect(view.asked).toEqual([[1, `go ${SITE}`]]);
+  });
+
+  it("keeps the aspect ratio while it is on, holding the other side within bounds", async () => {
+    const { view, user } = await onLinux();
+    const ratio = () => button("Keep the aspect ratio");
+    await user.selectOptions(device(), "iPad Mini");
+    expect(ratio().getAttribute("aria-pressed")).toBe("false");
+    await user.click(ratio());
+    expect(ratio().getAttribute("aria-pressed")).toBe("true");
+
+    await typeSide(user, "Width", "384");
+    await waitFor(() => expect(view.placed.get(1)?.page).toEqual({ width: 384, height: 512 }));
+    await typeSide(user, "Height", "1000");
+    await waitFor(() => expect(view.placed.get(1)?.page).toEqual({ width: 750, height: 1000 }));
+    await typeSide(user, "Width", "9000");
+    await waitFor(() => expect(view.placed.get(1)?.page).toEqual({ width: 9000, height: 9999 }));
+
+    await user.click(ratio());
+    await typeSide(user, "Width", "500");
+    await waitFor(() => expect(view.placed.get(1)?.page).toEqual({ width: 500, height: 9999 }));
+  });
+
   it("ends an annotation whose still was taken at another size, and deletes a still that comes after the change", async () => {
     URL.createObjectURL = () => "blob:still";
     URL.revokeObjectURL = () => {};

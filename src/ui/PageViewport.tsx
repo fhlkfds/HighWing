@@ -1,5 +1,6 @@
 // The size a web page in the Preview lays out at: the box it has (Responsive), a size the owner types, or a device's.
 // Only the page's viewport changes. Its user agent, touch and pixel density stay this computer's.
+import { ChevronDown, Link2, Unlink2 } from "lucide-react";
 import { useEffect, useState, type RefObject } from "react";
 
 import type { PageSize } from "./tauriPreview";
@@ -37,6 +38,9 @@ export function parseSide(text: string): number | undefined {
   const n = Number(text);
   return n >= SIDE.min && n <= SIDE.max ? n : undefined;
 }
+
+/** The side that keeps a ratio: rounded to whole pixels and held within `SIDE`. */
+const fitSide = (n: number): number => Math.min(SIDE.max, Math.max(SIDE.min, Math.round(n)));
 
 /**
  * The ground a page at a picked size keeps around it, in CSS pixels. The Preview's box has the pane's resize handle
@@ -98,11 +102,17 @@ export function ViewportBar({
 }) {
   const shown = value ?? (box && { width: box.width, height: box.height });
   const sizeKey = value ? `${value.width}x${value.height}` : "";
+  const [keepRatio, setKeepRatio] = useState(false);
   const typed = (side: "width" | "height", n: number) => {
     const other = side === "width" ? "height" : "width";
-    const keep = value?.[other] ?? parseSide(String(box?.[other] ?? ""));
+    const keep =
+      keepRatio && shown
+        ? fitSide((n * shown[other]) / shown[side])
+        : (value?.[other] ?? parseSide(String(box?.[other] ?? "")));
     if (keep !== undefined) onChange({ [side]: n, [other]: keep } as PageSize);
   };
+  const turnedWidth = shown && parseSide(String(shown.height));
+  const turnedHeight = shown && parseSide(String(shown.width));
   return (
     <div
       className="preview-viewport"
@@ -110,39 +120,42 @@ export function ViewportBar({
       aria-label="Page size"
       title={SIZE_ONLY}
     >
-      <select
-        className="select"
-        aria-label="Device"
-        value={value ? (value.device ?? TYPED) : ""}
-        onChange={(e) => {
-          const device = DEVICES.find((d) => d.name === e.target.value);
-          onChange(
-            device
-              ? {
-                  width: device.width,
-                  height: device.height,
-                  device: device.name,
-                }
-              : null,
-          );
-        }}
-      >
-        <option value="">Responsive</option>
-        {/* A typed size reads Responsive too, but is its own option, so picking Responsive then still clears it. Only
-            while there is one: the arrow keys would stop on it. */}
-        {value && !value.device && (
-          <option value={TYPED} hidden>
-            Responsive
-          </option>
-        )}
-        <optgroup label="Standard">
-          {DEVICES.map((d) => (
-            <option key={d.name} value={d.name}>
-              {d.name} ({d.width} × {d.height})
+      <span className="preview-viewport-device">
+        <select
+          className="select"
+          aria-label="Device"
+          value={value ? (value.device ?? TYPED) : ""}
+          onChange={(e) => {
+            const device = DEVICES.find((d) => d.name === e.target.value);
+            onChange(
+              device
+                ? {
+                    width: device.width,
+                    height: device.height,
+                    device: device.name,
+                  }
+                : null,
+            );
+          }}
+        >
+          <option value="">Responsive</option>
+          {/* A typed size reads Responsive too, but is its own option, so picking Responsive then still clears it. Only
+              while there is one: the arrow keys would stop on it. */}
+          {value && !value.device && (
+            <option value={TYPED} hidden>
+              Responsive
             </option>
-          ))}
-        </optgroup>
-      </select>
+          )}
+          <optgroup label="Standard">
+            {DEVICES.map((d) => (
+              <option key={d.name} value={d.name}>
+                {d.name} ({d.width} × {d.height})
+              </option>
+            ))}
+          </optgroup>
+        </select>
+        <ChevronDown aria-hidden size={16} />
+      </span>
       {/* Keyed by the size, so a draft (an invalid one, say) goes once another size applies. */}
       <SideField
         key={`w${sizeKey}`}
@@ -151,7 +164,9 @@ export function ViewportBar({
         placeholder={shown?.width}
         onCommit={(n) => typed("width", n)}
       />
-      <span aria-hidden>×</span>
+      <span className="preview-viewport-by" aria-hidden>
+        ×
+      </span>
       <SideField
         key={`h${sizeKey}`}
         label="Height"
@@ -159,6 +174,33 @@ export function ViewportBar({
         placeholder={shown?.height}
         onCommit={(n) => typed("height", n)}
       />
+      <button
+        type="button"
+        className="icon-btn preview-viewport-ratio"
+        aria-label="Keep the aspect ratio"
+        aria-pressed={keepRatio}
+        title={
+          keepRatio
+            ? "Width and height change together. Click to set them apart."
+            : "Width and height are set apart. Click to change them together."
+        }
+        onClick={() => setKeepRatio((k) => !k)}
+      >
+        {keepRatio ? <Link2 size={18} /> : <Unlink2 size={18} />}
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label="Rotate"
+        title="Swap the width and the height"
+        disabled={turnedWidth === undefined || turnedHeight === undefined}
+        onClick={() => {
+          if (turnedWidth === undefined || turnedHeight === undefined) return;
+          onChange({ width: turnedWidth, height: turnedHeight, device: value?.device });
+        }}
+      >
+        <RotateIcon />
+      </button>
       {value && scale < 1 && (
         <span
           className="preview-viewport-scale"
@@ -168,6 +210,29 @@ export function ViewportBar({
         </span>
       )}
     </div>
+  );
+}
+
+/** A device turned on its side, drawn in lucide's stroke style: lucide has no rotate-the-screen icon. */
+function RotateIcon() {
+  return (
+    <svg
+      aria-hidden
+      width={18}
+      height={18}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="9" y="5.5" width="6" height="13" rx="1.5" transform="rotate(-45 12 12)" />
+      <path d="M15 2.6a9.5 9.5 0 0 1 6.4 6.4" />
+      <path d="M21.4 6.2V9h-2.8" />
+      <path d="M9 21.4A9.5 9.5 0 0 1 2.6 15" />
+      <path d="M2.6 17.8V15h2.8" />
+    </svg>
   );
 }
 

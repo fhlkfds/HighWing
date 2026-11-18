@@ -2115,12 +2115,32 @@ button.settings-search-tab:hover { color: var(--text); }
 .preview-web-frame:focus { outline: none; }
 /* A page at a size of its own sits at the top of the box, centred, on the panel's ground. */
 .preview-web.sized { align-items: center; overflow: hidden; background: var(--raised); }
-.preview-viewport { flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); min-width: 0; }
-.preview-viewport select { flex: 1 1 auto; min-width: 0; max-width: 220px; height: 26px; padding: 0 6px; }
-.preview-viewport input { flex: 0 1 64px; min-width: 40px; width: 64px; height: 26px; padding: 0 6px; background: var(--bg); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; font: inherit; font-size: calc(13rem / 14); font-variant-numeric: tabular-nums; outline: none; }
-.preview-viewport input:focus-visible { border-color: var(--line-3); }
+.preview-viewport { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); min-width: 0; container-type: inline-size; }
+.preview-viewport-device { position: relative; flex: 0 1 auto; min-width: 0; display: flex; align-items: center; margin-right: 4px; }
+.preview-viewport-device select {
+  appearance: none; field-sizing: content; min-width: 160px; max-width: 100%; height: calc(32rem / 14); padding: 0 28px 0 8px; background: none; border-color: transparent;
+  color: var(--muted); font-size: calc(14rem / 14); cursor: pointer;
+}
+.preview-viewport-device select:hover { background: var(--hover-2); color: var(--text); }
+.preview-viewport-device svg { position: absolute; right: 8px; color: var(--muted); pointer-events: none; }
+.preview-viewport input {
+  flex: none; width: 64px; height: calc(32rem / 14); padding: 0 10px; background: var(--raised-2); color: var(--text-strong);
+  border: 1px solid var(--line-3); border-radius: 7px; font-family: var(--mono); font-size: calc(14rem / 14); font-variant-numeric: tabular-nums; outline: none;
+}
+.preview-viewport input::placeholder { color: var(--text-strong); opacity: 1; }
+.preview-viewport input:focus-visible { border-color: var(--muted); }
 .preview-viewport input[aria-invalid] { border-color: var(--warn); }
-.preview-viewport > span { color: var(--faint); font-size: calc(12rem / 14); }
+.preview-viewport-by { margin: 0 -2px; color: var(--muted); font-size: calc(16rem / 14); }
+.preview-viewport .icon-btn { flex: none; }
+.preview-viewport-ratio { margin-left: 8px; }
+.preview-viewport .icon-btn[aria-pressed="true"] { color: var(--text); }
+/* The narrowest panel keeps four digits in each side whole and gives the select what is left. */
+@container (max-width: 440px) {
+  .preview-viewport-device select { min-width: 0; }
+  .preview-viewport input { width: 52px; padding: 0 6px; }
+  .preview-viewport-ratio { margin-left: 0; }
+}
+.preview-viewport-scale { margin-left: auto; color: var(--faint); font-size: calc(12rem / 14); font-variant-numeric: tabular-nums; }
 .preview-loading { position: absolute; inset: 0; margin: 0; padding: 28px 22px; background: var(--sidebar); }
 .preview-image {
   flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 18px;
