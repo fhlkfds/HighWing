@@ -252,7 +252,7 @@ describe("Taking a screenshot for the composer", () => {
     await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
     const path = await rust.land();
     await waitFor(() => expect(chips()).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: /^Remove/ }));
     expect(chips()).toHaveLength(0);
     expect(rust.discarded).toEqual([path]);
   });
@@ -460,7 +460,7 @@ describe("Attachments staged in each chat (#443)", () => {
     await waitFor(() => expect(chips()).toHaveLength(1));
     await openChat(user, hermes, /NAS disks/);
     await openChat(user, hermes, /Nightly backup/);
-    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: /^Remove/ }));
     expect(chips()).toHaveLength(0);
     expect(rust.discarded).toEqual([path]);
   });
@@ -625,8 +625,8 @@ describe("Images placed in the words (ADR 0200)", () => {
     await user.click(screen.getByRole("button", { name: "Attach files" }));
     const placed = "Compare these. [image 2: image.png] [image 3: image.png]\nBoth are image.png";
     await waitFor(() => expect(composer().value).toBe(placed));
-    // The two marked images aren't shown again above the words; the first still is.
-    expect(stripped()).toHaveLength(1);
+    // Every staged image is in the strip, marked or not.
+    expect(stripped()).toHaveLength(3);
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Attach files" }));
 
     await user.click(composer());
@@ -637,7 +637,7 @@ describe("Images placed in the words (ADR 0200)", () => {
     expect(server.requests.find((r) => r.method === "prompt.submit")?.params).toMatchObject({ text: placed });
 
     const bubble = lastBubble();
-    expect(bubble.querySelectorAll(".msg-images > *")).toHaveLength(1);
+    expect(bubble.querySelectorAll(".msg-images > *")).toHaveLength(3);
     const inline = [...bubble.querySelectorAll(".bubble-text .inline-image")];
     expect(inline.map((i) => i.textContent)).toEqual(["image.png", "image.png"]);
     expect(bubble.querySelector(".bubble-text")!.textContent).toBe("Compare these. image.png image.png\nBoth are image.png");
@@ -669,7 +669,7 @@ describe("Images placed in the words (ADR 0200)", () => {
     await act(async () => release());
     await waitFor(() => expect(composer().value).toBe(`zero one [image 2: ${rust.names[1]}.png] two three`));
     expect(document.activeElement).toBe(elsewhere);
-    expect(stripped()).toHaveLength(1);
+    expect(stripped()).toHaveLength(2);
     checking.mockRestore();
     await user.clear(composer());
   });
@@ -714,28 +714,50 @@ describe("Images placed in the words (ADR 0200)", () => {
     await rust.land("\x89PNG marked");
     const mark = `[image 2: ${rust.names[1]}.png]`;
     await waitFor(() => expect(composer().value).toBe(`see ${mark}`));
-    expect(stripped()).toHaveLength(1);
+    expect(stripped()).toHaveLength(2);
 
     await caretAt(composer().value.length);
     await user.keyboard("{Backspace}");
     expect(composer().value).toBe("see ");
-    // The image isn't dropped with its mark: it waits above the words.
+    // The image isn't dropped with its mark.
     expect(stripped()).toHaveLength(2);
     await user.keyboard("{Control>}z{/Control}");
     expect(composer().value).toBe(`see ${mark}`);
-    expect(stripped()).toHaveLength(1);
+    expect(stripped()).toHaveLength(2);
 
-    // The image above goes; the marked one stays where it is, now the first sent.
-    await user.click(within(stripped()[0] as HTMLElement).getByRole("button", { name: "Remove" }));
-    expect(stripped()).toHaveLength(0);
+    // The first image goes; the marked one stays where it is, now the first sent.
+    await user.click(within(stripped()[0] as HTMLElement).getByRole("button", { name: /^Remove/ }));
+    expect(stripped()).toHaveLength(1);
     expect(composer().value).toBe(`see ${mark}`);
     await caretAt(composer().value.length);
     await user.keyboard("{Enter}");
     await settle(hermes);
     expect(server.requests.filter((r) => r.method === "image.attach_bytes").map((r) => r.params.content_base64)).toEqual([btoa("\x89PNG marked")]);
     expect(server.requests.find((r) => r.method === "prompt.submit")?.params).toMatchObject({ text: `see [image 1: ${rust.names[1]}.png]` });
-    expect(lastBubble().querySelectorAll(".msg-images")).toHaveLength(0);
+    expect(lastBubble().querySelectorAll(".msg-images > *")).toHaveLength(1);
     expect(lastBubble().querySelectorAll(".bubble-text .inline-image")).toHaveLength(1);
+  });
+
+  it("takes a marked image's mark out of the words with it when the owner removes the image, and Undo brings the words back", async () => {
+    const { hermes, rust, user } = await signedIn();
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    await rust.land("\x89PNG top");
+    await waitFor(() => expect(stripped()).toHaveLength(1));
+    await user.type(composer(), "see here now");
+    await caretAt("see".length);
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    await rust.land("\x89PNG marked");
+    const mark = `[image 2: ${rust.names[1]}.png]`;
+    await waitFor(() => expect(composer().value).toBe(`see ${mark} here now`));
+    expect(stripped()).toHaveLength(2);
+
+    await user.click(within(stripped()[1] as HTMLElement).getByRole("button", { name: /^Remove/ }));
+    expect(stripped()).toHaveLength(1);
+    expect(composer().value).toBe("see here now");
+    await settle(hermes);
+    await user.click(composer());
+    await user.keyboard("{Control>}z{/Control}");
+    expect(composer().value).toBe(`see ${mark} here now`);
   });
 
   it("places a stored message's images by its marks without reading any this app didn't send, and keeps an old message's above its words", async () => {
@@ -750,11 +772,12 @@ describe("Images placed in the words (ADR 0200)", () => {
     const [old, placed] = [...document.querySelectorAll<HTMLElement>(".msg.user")];
     expect(old.querySelectorAll(".msg-images > *")).toHaveLength(1);
     expect(old.querySelector(".bubble-text")!.textContent).toBe("old one");
-    expect(placed.querySelectorAll(".msg-images > *")).toHaveLength(1);
+    // Both images are above the words, and the one the mark names is a pill in them too.
+    expect(placed.querySelectorAll(".msg-images > *")).toHaveLength(2);
     const inline = placed.querySelectorAll(".bubble-text .inline-image");
     expect(inline).toHaveLength(1);
-    expect(within(inline[0] as HTMLElement).getByRole("button", { name: "Show image upload_c.png" })).toBeTruthy();
-    expect(placed.querySelector(".bubble-text")!.textContent).toMatch(/^look upload_c\.png.*second\.png and \[image 9: nothing\.png\]$/s);
+    expect(within(placed.querySelector(".msg-images") as HTMLElement).getByRole("button", { name: "Show image upload_c.png" })).toBeTruthy();
+    expect(placed.querySelector(".bubble-text")!.textContent).toBe("look second.png and [image 9: nothing.png]");
     expect(reads).not.toHaveBeenCalled();
   });
 });

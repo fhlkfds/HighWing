@@ -213,7 +213,7 @@ it("doesn't read an image a stored message names that this app didn't send until
   expect(routesAbout(server, planted), "nothing more read after the relaunch").toEqual(["/api/files", "/api/files/read"]);
 });
 
-it("keeps the first image above the words and shows each later one on the line it was put on, in the composer, sent and after a relaunch", async () => {
+it("shows every image as a thumbnail above the words and each later one as a pill on the line it was put on, in the composer, sent and after a relaunch", async () => {
   const { app, server, relaunch } = await boot({ seed });
   const first = await screenshotPng();
   const [left, right] = [await screenshotPng(20, 10, "#2471a3"), await screenshotPng(30, 20, "#1e8449")];
@@ -236,7 +236,7 @@ it("keeps the first image above the words and shows each later one on the line i
     .poll(() => [...doc().querySelectorAll<HTMLElement>(".inline-mark")].map((m) => m.textContent), { message: "each mark shows a chip with its name and size" })
     .toEqual([expect.stringMatching(/^image\.png\d/), expect.stringMatching(/^image\.png\d/)]);
   await expect.poll(() => doc().querySelectorAll(".inline-mark img").length, { message: "each chip has its thumbnail" }).toBe(2);
-  expect([...doc().querySelectorAll(".composer .chips .chip-name")].map((c) => c.textContent), "only the first stays above the words").toEqual([REPORTED]);
+  expect([...doc().querySelectorAll(".composer .chips .chip-name")].map((c) => c.textContent), "every staged image has a thumbnail above the words").toEqual([REPORTED, "image.png", "image.png"]);
   await shot("composer");
 
   await userEvent.keyboard("{Enter}");
@@ -254,11 +254,11 @@ it("keeps the first image above the words and shows each later one on the line i
     return { above: sizes(".msg-images img"), inline: sizes(".bubble-text .inline-image img"), words: bubble?.querySelector(".bubble-text")?.textContent };
   };
   const expected = {
-    above: [[40, 30]],
+    above: [[40, 30], [20, 10], [30, 20]],
     inline: [[20, 10], [30, 20]],
     words: "The first is the login page.\nThese two image.png image.png show the error.",
   };
-  await expect.poll(placed, { message: "the first above the words, the others on their line, each once" }).toEqual(expected);
+  await expect.poll(placed, { message: "every image above the words, the later ones also as a pill on their line" }).toEqual(expected);
   await shot("sent");
 
   await relaunch();
@@ -267,9 +267,9 @@ it("keeps the first image above the words and shows each later one on the line i
   await expect.poll(placed, { message: "the same after a relaunch, read back from what Hermes stored" }).toEqual(expected);
   await shot("after relaunch");
 
-  const second = lastSentBubble()!.querySelectorAll<HTMLButtonElement>(".bubble-text .inline-image button.sent-image")[1];
+  const second = lastSentBubble()!.querySelectorAll<HTMLButtonElement>("button.inline-image")[1];
   second.focus();
-  expect(appDocument().activeElement, "a picture in the words takes keyboard focus").toBe(second);
+  expect(appDocument().activeElement, "a pill in the words takes keyboard focus").toBe(second);
   await userEvent.keyboard("{Enter}");
   await expect
     .poll(() => [...appDocument().querySelectorAll<HTMLImageElement>(".preview-image img")].map((img) => [img.naturalWidth, img.naturalHeight]), {

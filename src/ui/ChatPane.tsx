@@ -37,7 +37,7 @@ import { wakeFull } from "../hermes/snooze";
 import { AttachmentChip, InlineSentImage, Previews, SentImages, readPreview } from "./previews";
 import { InlineMarks, type ComposerMark } from "./inlineMarks";
 import { sentWith } from "../hermes/sentImages";
-import { carried, highestMark, marksIn, markText, placeImages, sentText, withMarks } from "../hermes/inlineImages";
+import { carried, highestMark, marksIn, markText, placeImages, sentText, withMarks, withoutMarks } from "../hermes/inlineImages";
 import { Speaker } from "./speaker";
 import { DictationNoteView, DictationStrip, ListenButton, MicButton, type VoiceApi, listenBlocked, micBlocked, useDictation, useVoiceSetup } from "./Voice";
 import { withTranscript } from "../hermes/voice";
@@ -1301,7 +1301,7 @@ const BlockView = memo(
     );
     if (block.kind === "user") {
       const { images, chips } = sentWith(block);
-      const { above, pieces } = placeImages(block.text, images);
+      const pieces = placeImages(block.text, images);
       return (
         <div className={`msg user${block.outgoing ? ` outgoing ${block.outgoing.state}` : ""}${block.steer ? " steer" : ""}`} data-item={block.id} data-at={block.at}>
           {block.steer && (
@@ -1309,7 +1309,7 @@ const BlockView = memo(
               <CornerDownRight size={12} aria-hidden /> Steered into the reply
             </div>
           )}
-          {above.length > 0 && <SentImages images={above} offline={offline} />}
+          {images.length > 0 && <SentImages images={images} offline={offline} />}
           {chips.length > 0 && (
             <div className="msg-files">
               {chips.map((name, i) => (
@@ -2230,9 +2230,14 @@ function Composer({
   }, [text]);
 
   const sendable = attaching === 0 && (!!text.trim() || attachments.length > 0);
-  // The files no mark places, above the words: the first image, files that aren't images, and any whose mark went. An
-  // annotation stays there marked too, since its chip says which page it came from and whether that page moved on.
-  const above = attachments.filter((f) => annotations.has(f.path) || !marks.some((m) => m.file.path === f.path));
+  // Removing a marked image takes its marks out of the words too, as one edit, so no dead mark is left behind (ADR 0211).
+  const removeFile = (path: string) => {
+    const n = screenshots.numbersIn(draftKey).get(path);
+    screenshots.change({ kind: "removed", key: draftKey, paths: [path] });
+    if (n === undefined) return;
+    const next = withoutMarks(textRef.current, new Set([n]));
+    if (next !== textRef.current) onText(next);
+  };
   const slash = useSlashCommands(commands, text, onText, taRef);
   const step = (which: EditStep) => {
     const before = textRef.current;
@@ -2408,15 +2413,15 @@ function Composer({
             onTextModelSettings={references?.onTextModelSettings}
           />
         )}
-        {above.length > 0 && (
+        {attachments.length > 0 && (
           <div className="chips">
-            {above.map((f) => (
+            {attachments.map((f) => (
               <AttachmentChip
                 key={f.path}
                 file={f}
                 preview={previews.current?.get(f.path)}
                 annotation={annotations.get(f.path)}
-                onRemove={() => screenshots.change({ kind: "removed", key: draftKey, paths: [f.path] })}
+                onRemove={() => removeFile(f.path)}
               />
             ))}
           </div>

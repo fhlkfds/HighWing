@@ -153,12 +153,20 @@ describe("Image previews in the composer", () => {
 describe("Attachment chips", () => {
   const html = (el: React.ReactElement) => renderToStaticMarkup(el);
 
-  it("shows the thumbnail with the image's name and size", () => {
+  it("shows an image as a thumbnail card with its name and size in the tooltip, and Remove named for it", () => {
     const out = html(<AttachmentChip file={rack} preview={{ url: "blob:preview-1" }} onRemove={() => {}} />);
-    expect(out).toContain('<img class="chip-thumb" src="blob:preview-1" alt=""/>');
+    expect(out).toContain('<img class="chip-card-img" src="blob:preview-1" alt=""/>');
     expect(out).toContain("rack.png");
-    expect(out).toContain("9 B");
+    expect(out).toContain(`title="rack.png, 9 B\n${rack.path}"`);
     expect(out).toContain('title="Remove"');
+    expect(out).toContain('aria-label="Remove rack.png"');
+  });
+
+  it("shows a blank card while an image's thumbnail is read", () => {
+    const out = html(<AttachmentChip file={rack} onRemove={() => {}} />);
+    expect(out).not.toContain("<img");
+    expect(out).toContain("chip-card-blank");
+    expect(out).toContain("rack.png");
   });
 
   it("falls back to a paperclip and says why when there is no preview", () => {
@@ -168,13 +176,12 @@ describe("Attachment chips", () => {
     expect(out).toContain(`title="${rack.path}\nNo preview: No such file or directory (os error 2)"`);
   });
 
-  it("shows a paperclip while the thumbnail is read, and for files that aren't images", () => {
-    for (const f of [rack, file("/home/lena/notes.txt")]) {
-      const out = html(<AttachmentChip file={f} onRemove={() => {}} />);
-      expect(out).not.toContain("<img");
-      expect(out).toContain("lucide-paperclip");
-      expect(out).toContain(`title="${f.path}"`);
-    }
+  it("shows a paperclip chip for a file that isn't an image", () => {
+    const f = file("/home/lena/notes.txt");
+    const out = html(<AttachmentChip file={f} onRemove={() => {}} />);
+    expect(out).not.toContain("<img");
+    expect(out).toContain("lucide-paperclip");
+    expect(out).toContain(`title="${f.path}"`);
   });
 });
 

@@ -117,7 +117,7 @@ describe("Pasting into the composer", () => {
 
     const clipboardName = expect.stringMatching(/^clipboard-\d{4}-\d\d-\d\dT\d{6}\.png$/);
     expect(staged.map((s) => s.name)).toEqual([clipboardName, clipboardName]);
-    await waitFor(() => expect(document.querySelectorAll(".chip img.chip-thumb")).toHaveLength(2));
+    await waitFor(() => expect(document.querySelectorAll(".chip img.chip-card-img")).toHaveLength(2));
     expect(chips()[0].querySelector(".chip-name")?.textContent).toBe(staged[0].name);
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
