@@ -2396,7 +2396,7 @@ export function Main({
 
   // A bot visit (ADR 0203). A bot row in Bots mode whose profile isn't shown starts one, or carries one on, and the
   // owner's own bot ends it there. Chats and New chat go back to `home`; an ordinary chat of the bot's profile on screen
-  // makes that profile the owner's, and so does All N chats. The next launch opens on `home` while a visit lasts.
+  // makes that profile the owner's. The next launch opens on `home` while a visit lasts.
   const visitBot = (b: Bot) =>
     openBot(b, "open", b.profile === profile ? visit : b.profile === visit?.home ? undefined : (visit ?? { home: profile, before: active.chatId }));
   const goHome = (v: BotVisit, to: "chats" | "new") =>
@@ -3354,10 +3354,6 @@ export function Main({
                   pictures: botPictures,
                   leaving: leavingNote(profile, chats, words.profiles.leaving),
                   onOpenBot: (b) => openBot(b, "open"),
-                  onAllChats: () => {
-                    setVisit(undefined);
-                    setChatListMode("chats");
-                  },
                 }
               : undefined
           }
@@ -3367,7 +3363,7 @@ export function Main({
               look: shownLook ?? lookShown(shownBot, botPictures),
             }
           }
-          bots={(under) => (
+          bots={
             <>
               {botActions.head}
               {bots ? (
@@ -3381,13 +3377,12 @@ export function Main({
                   onOpen={visitBot}
                   onNewChat={(b) => openBot(b, "new")}
                   onMenu={botActions.onMenu}
-                  under={under}
                 />
               ) : (
                 <div className="empty-hint">{words.bots.reading}</div>
               )}
             </>
-          )}
+          }
             projectSwitcher={
               <ProjectSwitcher
                 projects={listable}

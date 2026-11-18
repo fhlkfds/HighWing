@@ -292,10 +292,6 @@ export const en = {
     manyNeedYou: (n: number) => `${n} bots need you`,
     openBotChat: (name: string) => `Open ${name}'s Bot Chat`,
     showBots: "Show the bots",
-    chatsOf: (name: string) => `${name}'s chats`,
-    inInbox: "In the Inbox",
-    allChats: (n: number) => (n === 1 ? "All 1 chat" : `All ${n} chats`),
-    noChats: "No chats yet.",
   },
   profiles: {
     title: "Profiles on this server",

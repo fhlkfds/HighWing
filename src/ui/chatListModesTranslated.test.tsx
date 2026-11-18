@@ -68,8 +68,8 @@ it("shows only catalogue words for several bots that need the owner, in Bots mod
   expect(parts(".sb-mode", ".sb-needs-you-slot")).toEqual([]);
 
   await user.click(panel().querySelector<HTMLElement>('[role=tab][data-mode="bots"]')!);
-  await waitFor(() => expect(panel().querySelector(".bots-chats")).toBeTruthy());
-  expect(parts(".sb-mode", ".bots-chats")).toEqual([]);
+  await waitFor(() => expect(panel().querySelector(".bots-row")).toBeTruthy());
+  expect(parts(".sb-mode")).toEqual([]);
 
   await user.click(panel().querySelector<HTMLElement>('.bots-row[data-profile="scribe"] .bots-open')!);
   await waitFor(() => expect(document.querySelector(".chat-head .bots-face")).toBeTruthy());

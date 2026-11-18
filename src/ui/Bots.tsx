@@ -6,13 +6,12 @@
 // opens its menu (ADR 0194): Chat, Settings, Clone, Pin, Hide and Delete, through Settings → Profiles' own dialogs and
 // `Hermes.editBot`, which never writes over a change made elsewhere (ADR 0189). Every word comes from the catalogue
 // (ADR 0100).
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowRight, ChevronDown, ChevronRight, Copy, EyeOff, Eye, Loader, MessageSquare, Pin, PinOff, Plus, RefreshCw, Settings2, ShieldAlert, SquarePen, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { ChevronDown, ChevronRight, Copy, EyeOff, Eye, Loader, MessageSquare, Pin, PinOff, Plus, RefreshCw, Settings2, ShieldAlert, SquarePen, Trash2 } from "lucide-react";
 import type { Bot, BotActivity, BotLook } from "../hermes/bots";
 import type { EditResult, Edits } from "../hermes/fieldMerge";
 import { PROFILE_ROUTES, profileFailure, type ProfileAction, type ProfileRow } from "../hermes/profiles";
-import { Age, Spinner, composing } from "./bits";
-import type { Chat } from "../hermes/model";
+import { composing } from "./bits";
 import { Menu } from "./ChatMenu";
 import { CloneProfileDialog } from "./CloneProfile";
 import { pick } from "./keybindings";
@@ -326,7 +325,7 @@ export function useBotActions({
 /**
  * The bots' rows: pinned first, hidden ones behind a disclosure, Up and Down between them. A row in another profile
  * than `profile` asks first while `leaving` says what switching leaves behind. `current`: the profile of the bot whose
- * Bot Chat is open. `under`: drawn under the shown profile's bot.
+ * Bot Chat is open.
  */
 export function BotList({
   bots,
@@ -338,7 +337,6 @@ export function BotList({
   onOpen,
   onNewChat,
   onMenu,
-  under,
 }: {
   bots: Bot[];
   pictures: Record<string, string>;
@@ -350,7 +348,6 @@ export function BotList({
   onNewChat: (bot: Bot) => void;
   /** Opens a bot's menu at a point of the window. `open`: opens the bot as its row does. */
   onMenu: (bot: Bot, x: number, y: number, open: () => void) => void;
-  under?: ReactNode;
 }) {
   const l = useLocale();
   const w = l.bots;
@@ -374,7 +371,7 @@ export function BotList({
       return onMenu(bot, r.left + 24, r.bottom, () => go(bot, "open"));
     }
     if (composing(e) || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
-    const rows = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(".bots-open, .bots-under button"));
+    const rows = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(".bots-open"));
     const at = rows.indexOf(document.activeElement as HTMLButtonElement);
     if (at < 0) return;
     e.preventDefault();
@@ -384,7 +381,7 @@ export function BotList({
   // Pinned bots first, then Hermes's order. Hidden ones wait behind a disclosure, as in Hermes's own list.
   const shown = bots.filter((b) => !b.hidden).sort((a, b) => Number(b.pinned) - Number(a.pinned));
   const hidden = bots.filter((b) => b.hidden);
-  const row = (b: Bot) => [
+  const row = (b: Bot) => (
     <Row
       key={b.profile}
       bot={b}
@@ -395,13 +392,8 @@ export function BotList({
       onOpen={() => go(b, "open")}
       onNewChat={() => go(b, "new")}
       onMenu={(x, y) => onMenu(b, x, y, () => go(b, "open"))}
-    />,
-    under && b.profile === profile && (
-      <li key={`${b.profile}-under`} className="bots-under">
-        {under}
-      </li>
-    ),
-  ];
+    />
+  );
 
   return (
     <>
@@ -429,53 +421,6 @@ export function BotList({
         {showHidden && hidden.map(row)}
       </ul>
     </>
-  );
-}
-
-export function BotChatsUnder({
-  name,
-  chats,
-  inbox,
-  total,
-  selectedId,
-  alsoShownId,
-  onOpen,
-  onAll,
-}: {
-  name: string;
-  chats: readonly Chat[];
-  inbox: ReadonlySet<string>;
-  total: number;
-  selectedId: string | null;
-  alsoShownId: string | null;
-  onOpen: (id: string) => void;
-  onAll: () => void;
-}) {
-  const w = useLocale().chatList;
-  return (
-    <ul className="bots-chats" role="group" aria-label={w.chatsOf(name)}>
-      {chats.map((c) => (
-        <li key={c.id} className={`row${c.id === selectedId ? " sel" : ""}${c.id === alsoShownId && c.id !== selectedId ? " shown" : ""}${c.unread ? " unread" : ""}`}>
-          <button className="row-open" data-chat={c.id} aria-current={c.id === selectedId || undefined} onClick={() => onOpen(c.id)}>
-            {inbox.has(c.id) ? <span className="bots-chat-mark" role="img" aria-label={w.inInbox} title={w.inInbox} /> : <span className="bots-chat-mark is-none" aria-hidden />}
-            <span className="row-title" translate="no">
-              {c.title}
-            </span>
-            <span className="row-meta">{c.running ? <Spinner /> : <Age at={c.updatedAt} />}</span>
-          </button>
-        </li>
-      ))}
-      {total > 0 ? (
-        <li>
-          <button className="bots-under-all" onClick={onAll}>
-            {w.allChats(total)}
-            <ArrowRight size={12} aria-hidden />
-          </button>
-        </li>
-      ) : (
-        <li className="empty-hint">{w.noChats}</li>
-      )}
-    </ul>
   );
 }
 
