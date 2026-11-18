@@ -2248,7 +2248,7 @@ function Composer({
   }, [text]);
 
   const sendable = attaching === 0 && (!!text.trim() || attachments.length > 0);
-  // Removing a marked image takes its marks out of the words too, as one edit, so no dead mark is left behind (ADR 0213).
+  // Removing a marked image takes its marks out of the words too, as one edit, so no dead mark is left behind (ADR 0220).
   const removeFile = (path: string) => {
     const n = desk.numbersIn(draftKey).get(path);
     desk.change({ kind: "removed", key: draftKey, paths: [path] });

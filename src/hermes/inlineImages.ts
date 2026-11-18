@@ -1,7 +1,7 @@
 // Where a message's images go in its words (ADR 0200). Hermes stores a message's words as they were sent and its images
 // as `@image:` lines after them, in the order they were attached (`peelImages`), so a mark in the words, such as
 // `[image 2: shot.png]`, says where the second image goes. The model reads the same mark beside the images it is sent.
-// A sent message shows every image above its words, and each mark as a pill in them (ADR 0213).
+// A sent message shows every image above its words, and each mark as a pill in them (ADR 0220).
 import type { Attachment, SentImage } from "./model";
 
 /** A mark in a message's words: the image it places (`n`, counted from 1) and the name it shows. */
@@ -57,7 +57,7 @@ export function sentText(text: string, attachments: readonly Attachment[], numbe
 /** A piece of a sent message's words: words, or the image a mark places there with the name the mark gives it. */
 export type Piece = string | { image: SentImage; name: string };
 
-/** A sent message's words split at the marks of its images (ADR 0213). Every image is also shown above the words. */
+/** A sent message's words split at the marks of its images (ADR 0220). Every image is also shown above the words. */
 export function placeImages(text: string, images: readonly SentImage[]): Piece[] {
   const marks = marksIn(text, (n) => n <= images.length);
   const pieces: Piece[] = [];
