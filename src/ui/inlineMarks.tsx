@@ -1,8 +1,9 @@
 // The composer's image marks drawn as chips over its text (ADR 0200). The words stay one plain textarea, so typing,
 // IME, selection, undo and the slash menu work as they always did. A mirror laid out as the textarea is finds where each
 // mark is, and a chip with the image's thumbnail, name and size covers it there. While the cursor or a selection is in
-// a mark, or the mark wraps onto a second line, its words show instead.
-import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode, type RefObject } from "react";
+// a mark, its words show instead. A mark that wraps onto more lines gets its chip on the widest line and a plain cover on
+// the others, so its words never show (ADR 0211).
+import { Fragment, useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { ImageMark } from "../hermes/inlineImages";
 import type { Attachment } from "../hermes/model";
 import { formatBytes } from "../hermes/values";
@@ -11,6 +12,8 @@ import type { Preview } from "./previews";
 export type ComposerMark = ImageMark & { file: Attachment };
 
 type Box = { left: number; top: number; width: number; height: number };
+/** Where a mark is drawn: the chip's box, and the boxes of the mark's other lines, covered with the composer's own colour. */
+type Placed = { chip: Box; covers: Box[] };
 
 /** What the mirror copies from the textarea, so its text wraps where the textarea's does. */
 const LAYOUT = [
@@ -33,7 +36,7 @@ export function InlineMarks({
   previews: (path: string) => Preview | undefined;
 }) {
   const mirror = useRef<HTMLDivElement>(null);
-  const [boxes, setBoxes] = useState<(Box | undefined)[]>([]);
+  const [boxes, setBoxes] = useState<(Placed | undefined)[]>([]);
   const [width, resized] = useReducer((_: number, w: number) => w, 0);
 
   useEffect(() => {
@@ -69,10 +72,15 @@ export function InlineMarks({
     const spans = m.querySelectorAll<HTMLElement>("[data-mark]");
     setBoxes(
       [...spans].map((s) => {
-        const rects = s.getClientRects();
-        if (rects.length !== 1) return undefined;
-        const r = rects[0];
-        return { left: r.left - origin.left - m.clientLeft, top: r.top - origin.top - m.clientTop + m.scrollTop, width: r.width, height: r.height };
+        const boxes = [...s.getClientRects()].map((r) => ({
+          left: r.left - origin.left - m.clientLeft,
+          top: r.top - origin.top - m.clientTop + m.scrollTop,
+          width: r.width,
+          height: r.height,
+        }));
+        if (!boxes.length) return undefined;
+        const widest = boxes.reduce((w, b) => (b.width > w.width ? b : w));
+        return { chip: widest, covers: boxes.filter((b) => b !== widest) };
       }),
     );
   }, [ta, text, marks, width]);
@@ -89,16 +97,22 @@ export function InlineMarks({
     <div ref={mirror} className="inline-marks" aria-hidden>
       {pieces}
       {marks.map((k, i) => {
-        const box = boxes[i];
-        if (!box || (a < k.end && b > k.start)) return null;
+        const placed = boxes[i];
+        if (!placed || (a < k.end && b > k.start)) return null;
+        const box = placed.chip;
         const preview = previews(k.file.path);
         const url = preview && "url" in preview ? preview.url : undefined;
         return (
-          <span key={`chip:${i}`} className="inline-mark" style={{ ...box, left: box.left - 1, width: box.width + 2 }} data-inline-image={k.n}>
-            {url ? <img src={url} alt="" /> : <span className="inline-mark-blank" />}
-            <span className="inline-mark-name">{k.file.name}</span>
-            <span className="inline-mark-size">{formatBytes(k.file.size)}</span>
-          </span>
+          <Fragment key={`chip:${i}`}>
+            {placed.covers.map((c, j) => (
+              <span key={j} className="inline-mark-cover" style={{ ...c, left: c.left - 1, width: c.width + 2 }} />
+            ))}
+            <span className="inline-mark" style={{ ...box, left: box.left - 1, width: box.width + 2 }} data-inline-image={k.n}>
+              {url ? <img src={url} alt="" /> : <span className="inline-mark-blank" />}
+              <span className="inline-mark-name">{k.file.name}</span>
+              <span className="inline-mark-size">{formatBytes(k.file.size)}</span>
+            </span>
+          </Fragment>
         );
       })}
     </div>
